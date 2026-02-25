@@ -1,80 +1,272 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quick Start
+description: Get started with vinext in 5 minutes. Create a new project or migrate an existing Next.js app.
 ---
 
-## Get started in three steps
+# Quick Start
 
-Get your documentation site running locally and make your first customization.
-
-### Step 1: Set up your local environment
-
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 2: Deploy your changes
-
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
-
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
-
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 3: Go live
-
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
-
-## Next steps
-
-Now that you have your docs running, explore these key features:
-
-<CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
-</CardGroup>
+Get up and running with vinext in just a few minutes. This guide will walk you through the fastest path to a working vinext application.
 
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+  vinext is a drop-in replacement for the Next.js CLI. If you have an existing Next.js project, you can migrate it to vinext with minimal changes.
 </Note>
+
+## Option 1: Automated Migration (Recommended)
+
+The easiest way to get started is using the Agent Skill that handles migration automatically. It works with Claude Code, OpenCode, Cursor, Codex, and dozens of other AI coding tools.
+
+<Steps>
+  <Step title="Install the Agent Skill">
+    Run this command in your terminal:
+
+    ```bash
+    npx skills add cloudflare/vinext
+    ```
+  </Step>
+
+  <Step title="Open Your Next.js Project">
+    Open your Next.js project in any supported AI coding tool (Claude Code, OpenCode, Cursor, etc.)
+  </Step>
+
+  <Step title="Run the Migration">
+    Ask the AI:
+
+    ```
+    migrate this project to vinext
+    ```
+
+    The skill handles compatibility checking, dependency installation, config generation, and dev server startup. It knows what vinext supports and will flag anything that needs manual attention.
+  </Step>
+</Steps>
+
+## Option 2: One-Command Migration
+
+If you prefer to migrate manually, vinext provides a single command that automates the entire process.
+
+<Steps>
+  <Step title="Install vinext">
+    In your existing Next.js project, install vinext:
+
+    ```bash
+    npm install vinext
+    ```
+  </Step>
+
+  <Step title="Run vinext init">
+    Run the migration command:
+
+    ```bash
+    npx vinext init
+    ```
+
+    This will:
+    - Run compatibility check to scan for issues
+    - Install `vite` and `@vitejs/plugin-rsc` (for App Router)
+    - Rename CJS config files to avoid ESM conflicts
+    - Add `"type": "module"` to `package.json`
+    - Add `dev:vinext` and `build:vinext` scripts
+    - Generate a minimal `vite.config.ts`
+
+    <Tip>
+      The migration is non-destructive. Your existing Next.js setup continues to work alongside vinext.
+    </Tip>
+  </Step>
+
+  <Step title="Start the Development Server">
+    Start the vinext dev server:
+
+    ```bash
+    npm run dev:vinext
+    ```
+
+    Your app will be available at `http://localhost:3001` (port 3001 to avoid conflicts with Next.js).
+
+    Your original Next.js setup still works:
+
+    ```bash
+    npm run dev  # Still runs Next.js
+    ```
+  </Step>
+</Steps>
+
+## Option 3: Manual Setup
+
+For maximum control, you can set up vinext manually in just a few steps.
+
+<Steps>
+  <Step title="Install vinext">
+    ```bash
+    npm install vinext
+    ```
+  </Step>
+
+  <Step title="Update package.json Scripts">
+    Replace `next` with `vinext` in your scripts:
+
+    ```json package.json
+    {
+      "scripts": {
+        "dev": "vinext dev",
+        "build": "vinext build",
+        "start": "vinext start"
+      }
+    }
+    ```
+  </Step>
+
+  <Step title="Start the Dev Server">
+    ```bash
+    npm run dev
+    ```
+
+    vinext auto-detects your `app/` or `pages/` directory, loads `next.config.js`, and configures Vite automatically. No `vite.config.ts` required for basic usage.
+  </Step>
+</Steps>
+
+## Verify Your Setup
+
+Once you've completed any of the above options, verify everything is working:
+
+<CodeGroup>
+```bash Development Server
+vinext dev
+# or
+npm run dev
+```
+
+```bash Production Build
+vinext build
+```
+
+```bash Production Server
+vinext start
+```
+</CodeGroup>
+
+You should see your app running with Vite's fast HMR. Try making a change to a component and watch it update instantly!
+
+## Check Compatibility
+
+Before fully migrating, it's a good idea to check your project for compatibility issues:
+
+```bash
+vinext check
+```
+
+This scans your Next.js app and produces a compatibility report showing:
+- Which imports are supported
+- Config options that work with vinext
+- Libraries that are compatible
+- Conventions that are supported
+
+## Deploy to Cloudflare Workers
+
+Once your app is running locally, deploying to Cloudflare Workers is a single command:
+
+```bash
+vinext deploy
+```
+
+This command:
+- Auto-generates configuration files (`vite.config.ts`, `wrangler.jsonc`, `worker/index.ts`)
+- Builds your application
+- Deploys to Cloudflare Workers
+- Handles common migration issues automatically
+
+<Tip>
+  Use `vinext deploy --preview` to deploy to a preview environment for testing.
+</Tip>
+
+## Next Steps
+
+Now that you have vinext running, here are some things to explore:
+
+<CardGroup cols={2}>
+  <Card title="Installation Guide" icon="download" href="/installation">
+    Learn about advanced configuration and customization
+  </Card>
+  <Card title="CLI Reference" icon="terminal" href="/introduction#cli-commands">
+    Explore all available vinext commands
+  </Card>
+  <Card title="API Coverage" icon="check" href="/introduction#api-coverage">
+    See what Next.js features are supported
+  </Card>
+  <Card title="Live Examples" icon="globe" href="/introduction#live-examples">
+    Check out deployed examples running on Workers
+  </Card>
+</CardGroup>
+
+## Troubleshooting
+
+### Port Already in Use
+
+If port 3000 is already in use, specify a different port:
+
+```bash
+vinext dev --port 3001
+```
+
+### Module Not Found Errors
+
+Make sure you have the required peer dependencies installed:
+
+```bash
+npm install react@^19.2.0 react-dom@^19.2.0 vite@^7.0.0
+```
+
+### Type Errors
+
+If you see TypeScript errors, make sure your `tsconfig.json` includes the correct paths. vinext uses `vite-tsconfig-paths` to resolve path aliases automatically.
+
+### Build Errors with App Router
+
+For App Router projects, you need `@vitejs/plugin-rsc`. If you didn't use `vinext init`, install it manually:
+
+```bash
+npm install -D @vitejs/plugin-rsc
+```
+
+Then create a `vite.config.ts`:
+
+```ts vite.config.ts
+import { defineConfig } from "vite";
+import vinext from "vinext";
+import rsc from "@vitejs/plugin-rsc";
+
+export default defineConfig({
+  plugins: [
+    vinext(),
+    rsc({
+      entries: {
+        rsc: "virtual:vinext-rsc-entry",
+        ssr: "virtual:vinext-app-ssr-entry",
+        client: "virtual:vinext-app-browser-entry",
+      },
+    }),
+  ],
+});
+```
+
+## Common Questions
+
+<AccordionGroup>
+  <Accordion title="Do I need to remove Next.js dependencies?">
+    No! The migration is non-destructive. You can keep Next.js installed and switch between `next` and `vinext` as needed. This makes it easy to test vinext without committing fully.
+  </Accordion>
+
+  <Accordion title="Will my existing Next.js code work?">
+    Most of it, yes! vinext supports ~94% of the Next.js 16 API surface. Run `vinext check` to see what's supported in your specific project.
+  </Accordion>
+
+  <Accordion title="Can I use TypeScript?">
+    Yes! vinext fully supports TypeScript. Your existing `tsconfig.json` and path aliases work automatically.
+  </Accordion>
+
+  <Accordion title="What about my middleware and API routes?">
+    Both are fully supported. `middleware.ts`, `proxy.ts` (Next.js 16), and API routes in both `pages/api/` and `app/` directories work as expected.
+  </Accordion>
+
+  <Accordion title="Can I deploy to platforms other than Cloudflare Workers?">
+    Currently only Cloudflare Workers is officially supported and tested. Support for other platforms is something we'd like to explore. The `vinext start` command runs a Node.js server for local testing.
+  </Accordion>
+</AccordionGroup>

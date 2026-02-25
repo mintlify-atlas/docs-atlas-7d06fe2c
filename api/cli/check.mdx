@@ -1,0 +1,486 @@
+---
+title: vinext check
+description: Scan your Next.js project for vinext compatibility
+---
+
+Scans an existing Next.js project and produces a detailed compatibility report showing which features are supported, partially supported, or unsupported by vinext.
+
+## Usage
+
+```bash
+vinext check [options]
+```
+
+## Options
+
+<ParamField path="--help" type="flag">
+  Show help for this command. Can also use `-h`.
+  
+  ```bash
+  vinext check --help
+  ```
+</ParamField>
+
+## What It Checks
+
+The check command analyzes four areas:
+
+1. **Imports**: Scans source files for `next/*` imports
+2. **Config**: Analyzes `next.config.*` for supported options
+3. **Libraries**: Checks `package.json` dependencies for known libraries
+4. **Conventions**: Examines file structure (pages, app, middleware, etc.)
+
+### Compatibility Scores
+
+Each item gets a status:
+
+<ResponseField name="supported" type="status">
+  Feature works out of the box with no changes needed.
+</ResponseField>
+
+<ResponseField name="partial" type="status">
+  Feature works but with limitations or differences from Next.js.
+</ResponseField>
+
+<ResponseField name="unsupported" type="status">
+  Feature is not implemented or incompatible with vinext.
+</ResponseField>
+
+## Example Output
+
+```bash
+vinext check
+
+  Scanning project...
+
+  vinext compatibility report
+  ========================================
+
+  Imports: 8/10 fully supported
+    ✓  next/link
+    ✓  next/navigation (3 files)
+    ✓  next/headers
+    ✓  next/server
+    ~  next/image — uses @unpic/react (no local optimization yet)
+    ~  next/font/google — fonts loaded from CDN, not self-hosted
+    ✗  next/amp — AMP is not supported
+
+  Config: 5/6 options supported
+    ✓  redirects
+    ✓  rewrites
+    ✓  headers
+    ✓  i18n
+    ~  images — remotePatterns validated, no local optimization
+    ✗  webpack — Vite replaces webpack — custom webpack configs need migration
+
+  Libraries: 4/5 compatible
+    ✓  next-themes
+    ✓  nuqs
+    ✓  tailwindcss
+    ✓  zod
+    ✗  next-auth — relies on Next.js API route internals; consider migrating to better-auth
+
+  Project structure:
+    ✓  App Router (app/)
+    ✓  15 page(s)
+    ✓  3 layout(s)
+    ✓  2 route handler(s)
+    ✓  Custom _app
+    ✗  Missing "type": "module" in package.json — required for Vite — vinext init will add it automatically
+
+  ────────────────────────────────────────
+  Overall: 82% compatible (22 supported, 3 partial, 3 issues)
+
+  Issues to address:
+    ✗  next/amp — AMP is not supported
+    ✗  webpack — Vite replaces webpack — custom webpack configs need migration
+    ✗  next-auth — relies on Next.js API route internals; consider migrating to better-auth
+
+  Partial support (may need attention):
+    ~  next/image — uses @unpic/react (no local optimization yet)
+    ~  next/font/google — fonts loaded from CDN, not self-hosted
+    ~  images — remotePatterns validated, no local optimization
+
+  Recommended next steps:
+    Run vinext init to set up your project automatically
+
+  Or manually:
+    1. Add "type": "module" to package.json
+    2. Install: npm install -D vinext vite @vitejs/plugin-rsc
+    3. Create vite.config.ts (see docs)
+    4. Run: npx vite dev
+```
+
+## How It Works
+
+### Import Scanning
+
+Scans all `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs` files for `next/*` imports:
+
+```typescript
+// From check.ts:137-194
+export function scanImports(root: string): CheckItem[] {
+  const files = findSourceFiles(root);
+  const importUsage = new Map<string, string[]>();
+
+  const importRegex = /(?:import\s+(?:[\w{},\s*]+\s+from\s+)?|require\s*\()['"]([^'"]+)['"]\)?/g;
+  // Skip `import type` — they're erased at compile time
+  const typeOnlyImportRegex = /import\s+type\s+/;
+
+  for (const file of files) {
+    const content = fs.readFileSync(file, "utf-8");
+    let match;
+    while ((match = importRegex.exec(content)) !== null) {
+      const mod = match[1];
+      // Skip type-only imports (no runtime effect)
+      const lineStart = content.lastIndexOf("\n", match.index) + 1;
+      const line = content.slice(lineStart, match.index + match[0].length);
+      if (typeOnlyImportRegex.test(line)) continue;
+      
+      // Only track next/* imports
+      if (mod.startsWith("next/") || mod === "next" || mod === "server-only" || mod === "client-only") {
+        if (!importUsage.has(mod)) importUsage.set(mod, []);
+        importUsage.get(mod)!.push(path.relative(root, file));
+      }
+    }
+  }
+
+  // Map to support status
+  return importUsage.entries().map(([mod, files]) => {
+    const support = IMPORT_SUPPORT[mod];
+    return {
+      name: mod,
+      status: support?.status ?? "unsupported",
+      detail: support?.detail,
+      files,
+    };
+  });
+}
+```
+
+Skips:
+- `import type` statements (type-only, erased at compile time)
+- `node_modules/`, `.next/`, `dist/`, `.git/` directories
+
+### Config Analysis
+
+Searches `next.config.*` for known config options:
+
+```typescript
+// From check.ts:199-259
+export function analyzeConfig(root: string): CheckItem[] {
+  const configFiles = ["next.config.ts", "next.config.mjs", "next.config.js", "next.config.cjs"];
+  let configPath: string | null = null;
+  for (const f of configFiles) {
+    const p = path.join(root, f);
+    if (fs.existsSync(p)) { configPath = p; break; }
+  }
+
+  if (!configPath) {
+    return [{ name: "next.config", status: "supported", detail: "no config file found (defaults are fine)" }];
+  }
+
+  const content = fs.readFileSync(configPath, "utf-8");
+  const items: CheckItem[] = [];
+
+  // Check for known config options by searching for property names
+  const configOptions = [
+    "basePath", "trailingSlash", "redirects", "rewrites", "headers",
+    "i18n", "env", "images", "output", "transpilePackages", "webpack",
+    "reactStrictMode", "poweredByHeader",
+  ];
+
+  for (const opt of configOptions) {
+    const regex = new RegExp(`\\b${opt}\\b`);
+    if (regex.test(content)) {
+      const support = CONFIG_SUPPORT[opt];
+      items.push({ name: opt, status: support.status, detail: support.detail });
+    }
+  }
+  
+  // Check experimental options
+  // ...
+  
+  return items;
+}
+```
+
+Searches for these config options:
+- `basePath`, `trailingSlash`, `redirects`, `rewrites`, `headers`
+- `i18n`, `env`, `images`, `output`, `transpilePackages`
+- `webpack`, `reactStrictMode`, `poweredByHeader`
+- `experimental.ppr`, `experimental.typedRoutes`, `experimental.serverActions`
+- `i18n.domains`
+
+### Library Checking
+
+Reads `package.json` and checks for known libraries:
+
+```typescript
+// From check.ts:264-289
+export function checkLibraries(root: string): CheckItem[] {
+  const pkgPath = path.join(root, "package.json");
+  if (!fs.existsSync(pkgPath)) return [];
+
+  const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
+  const allDeps = { ...pkg.dependencies, ...pkg.devDependencies };
+  const items: CheckItem[] = [];
+
+  for (const [lib, support] of Object.entries(LIBRARY_SUPPORT)) {
+    if (allDeps[lib]) {
+      items.push({
+        name: lib,
+        status: support.status,
+        detail: support.detail,
+      });
+    }
+  }
+
+  return items;
+}
+```
+
+Checks for:
+- **Auth**: `next-auth`, `@auth/nextjs`, `@clerk/nextjs`, `better-auth`
+- **UI**: `next-themes`, `nuqs`, `next-view-transitions`, `tailwindcss`, `styled-components`, `@emotion/react`
+- **Data**: `prisma`, `drizzle`, `@t3-oss/env-nextjs`, `zod`, `react-hook-form`
+- **Monitoring**: `@vercel/analytics`, `@sentry/nextjs`
+- **i18n**: `next-intl`
+- **Components**: `lucide-react`, `framer-motion`, `@radix-ui/*`, `shadcn-ui`
+
+### Convention Checking
+
+Examines file structure:
+
+```typescript
+// From check.ts:294-424
+export function checkConventions(root: string): CheckItem[] {
+  const items: CheckItem[] = [];
+
+  // Check for pages/ and app/ directories
+  const pagesDir = findPagesDir(root);
+  const appDir = findAppDir(root);
+  
+  if (pagesDir) {
+    items.push({ name: "Pages Router (pages/)", status: "supported" });
+    
+    // Count pages, API routes
+    const pageFiles = findSourceFiles(pagesDir);
+    const pages = pageFiles.filter(f => !f.includes("/api/"));
+    const apiRoutes = pageFiles.filter(f => f.includes("/api/"));
+    
+    items.push({ name: `${pages.length} page(s)`, status: "supported" });
+    if (apiRoutes.length) {
+      items.push({ name: `${apiRoutes.length} API route(s)`, status: "supported" });
+    }
+    
+    // Check for _app, _document
+    // ...
+  }
+  
+  if (appDir) {
+    items.push({ name: "App Router (app/)", status: "supported" });
+    
+    // Count pages, layouts, route handlers, loading/error boundaries
+    // ...
+  }
+  
+  // Check for middleware.ts or proxy.ts
+  // ...
+  
+  // Check for "type": "module" in package.json
+  // ...
+  
+  return items;
+}
+```
+
+Detects:
+- **Router type**: App Router (`app/`), Pages Router (`pages/`), or both
+- **Pages/routes**: Counts pages, layouts, route handlers, API routes
+- **Special files**: `_app`, `_document`, `middleware.ts`, `proxy.ts`
+- **Missing config**: `"type": "module"` in package.json
+- **React canary APIs**: `ViewTransition` usage
+- **PostCSS config**: String-form plugins that need resolution
+
+## Support Maps
+
+### Imports
+
+| Import | Status | Notes |
+|--------|--------|-------|
+| `next/link` | ✓ Supported | |
+| `next/image` | ~ Partial | Uses @unpic/react, no local optimization |
+| `next/router` | ✓ Supported | Pages Router only |
+| `next/navigation` | ✓ Supported | App Router |
+| `next/headers` | ✓ Supported | `headers()`, `cookies()` |
+| `next/server` | ✓ Supported | `NextRequest`, `NextResponse` |
+| `next/cache` | ✓ Supported | `revalidateTag`, `revalidatePath`, `unstable_cache` |
+| `next/dynamic` | ✓ Supported | |
+| `next/head` | ✓ Supported | Pages Router |
+| `next/script` | ✓ Supported | |
+| `next/font/google` | ~ Partial | Fonts from CDN, not self-hosted |
+| `next/font/local` | ~ Partial | `className` works, `variable` mode broken |
+| `next/og` | ✓ Supported | `ImageResponse` via @vercel/og |
+| `next/config` | ✓ Supported | |
+| `next/amp` | ✗ Unsupported | AMP not implemented |
+| `next/document` | ✓ Supported | Custom `_document.tsx` |
+| `next/app` | ✓ Supported | Custom `_app.tsx` |
+| `next/error` | ✓ Supported | |
+| `next/third-parties/*` | ✗ Unsupported | Third-party script optimization not implemented |
+| `server-only` | ✓ Supported | |
+| `client-only` | ✓ Supported | |
+
+### Config Options
+
+| Option | Status | Notes |
+|--------|--------|-------|
+| `basePath` | ✓ Supported | |
+| `trailingSlash` | ✓ Supported | |
+| `redirects` | ✓ Supported | |
+| `rewrites` | ✓ Supported | |
+| `headers` | ✓ Supported | |
+| `i18n` | ✓ Supported | Path-prefix routing (domains not supported) |
+| `env` | ✓ Supported | |
+| `images` | ~ Partial | `remotePatterns` validated, no local optimization |
+| `output` | ✓ Supported | `'export'` and `'standalone'` modes |
+| `transpilePackages` | ✓ Supported | Vite handles natively |
+| `webpack` | ✗ Unsupported | Vite replaces webpack |
+| `experimental.ppr` | ✗ Unsupported | Partial prerendering not implemented |
+| `experimental.typedRoutes` | ✗ Unsupported | Typed routes not implemented |
+| `experimental.serverActions` | ✓ Supported | `'use server'` directive |
+| `i18n.domains` | ✗ Unsupported | Domain-based i18n not implemented |
+| `reactStrictMode` | ✓ Supported | Always enabled |
+| `poweredByHeader` | ✓ Supported | Not sent (matching Next.js default) |
+
+### Libraries
+
+| Library | Status | Notes |
+|---------|--------|-------|
+| `next-themes` | ✓ Supported | |
+| `nuqs` | ✓ Supported | |
+| `next-view-transitions` | ✓ Supported | |
+| `@vercel/analytics` | ✓ Supported | Client-side injection |
+| `next-intl` | ~ Partial | Middleware-based setup works |
+| `@clerk/nextjs` | ✗ Unsupported | Deep middleware integration not compatible |
+| `@auth/nextjs` | ✗ Unsupported | Relies on internal auth handlers |
+| `next-auth` | ✗ Unsupported | Migrate to better-auth |
+| `better-auth` | ✓ Supported | Uses only public APIs |
+| `@sentry/nextjs` | ~ Partial | Client works, server needs manual setup |
+| `@t3-oss/env-nextjs` | ✓ Supported | |
+| `tailwindcss` | ✓ Supported | |
+| `styled-components` | ~ Partial | Needs `useServerInsertedHTML` (not yet implemented) |
+| `@emotion/react` | ~ Partial | Needs `useServerInsertedHTML` (not yet implemented) |
+| `lucide-react` | ✓ Supported | |
+| `framer-motion` | ✓ Supported | |
+| `@radix-ui/*` | ✓ Supported | |
+| `shadcn-ui` | ✓ Supported | |
+| `zod` | ✓ Supported | |
+| `react-hook-form` | ✓ Supported | |
+| `prisma` | ✓ Supported | Works with Prisma Accelerate on Workers |
+| `drizzle` | ✓ Supported | Works with D1 on Workers |
+
+## Interpreting Results
+
+### High Compatibility (90%+)
+
+Your project should work with minimal changes:
+
+1. Run `vinext init` to set up automatically
+2. Start dev server: `npm run dev:vinext`
+3. Address any "partial" warnings if needed
+
+### Medium Compatibility (70-89%)
+
+Most features work, but you'll need to address some issues:
+
+1. Review "unsupported" items in the report
+2. Plan migrations (e.g., `next-auth` → `better-auth`)
+3. Run `vinext init` to set up the basics
+4. Test thoroughly and adjust
+
+### Low Compatibility (less than 70%)
+
+Significant work required:
+
+1. Review all unsupported features
+2. Check if alternatives exist (e.g., AMP → standard HTML)
+3. Consider gradual migration (run Next.js and vinext side-by-side)
+4. File issues for missing features you need
+
+## Common Issues and Solutions
+
+### Webpack Config Detected
+
+**Issue**: You have custom webpack config in `next.config.js`
+
+**Solution**: Migrate to Vite plugins. Most webpack loaders have Vite equivalents:
+
+- `sass-loader` → Built into Vite
+- `babel-loader` → `@vitejs/plugin-react`
+- `file-loader` → Vite handles assets natively
+- Custom plugins → Check for Vite equivalents or write a Vite plugin
+
+### next-auth Detected
+
+**Issue**: `next-auth` relies on Next.js internals
+
+**Solution**: Migrate to `better-auth`:
+
+```bash
+npm install better-auth
+```
+
+See migration guide: https://authjs.dev/getting-started/migrate-to-better-auth
+
+### Missing "type": "module"
+
+**Issue**: Your `package.json` doesn't have `"type": "module"`
+
+**Solution**: Run `vinext init` to add it automatically, or add manually:
+
+```json
+{
+  "type": "module"
+}
+```
+
+Rename CJS files to `.cjs` extension.
+
+### styled-components Detected
+
+**Issue**: Requires `useServerInsertedHTML` (not yet implemented)
+
+**Solution**: Either:
+
+1. Wait for `useServerInsertedHTML` support (tracked in issues)
+2. Switch to CSS modules or Tailwind (both work perfectly)
+3. Use styled-components client-side only (not recommended for SSR)
+
+## Integration with vinext init
+
+The check command runs automatically when you use `vinext init`:
+
+```bash
+vinext init
+# Runs vinext check first
+# Shows compatibility report
+# Then proceeds with migration
+```
+
+Skip the check:
+
+```bash
+vinext init --skip-check
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="init Command" icon="rocket" href="/api/cli/init">
+    Migrate your project automatically
+  </Card>
+  <Card title="Compatibility Guide" icon="book" href="/advanced/api-coverage">
+    Deep dive into what's supported
+  </Card>
+</CardGroup>

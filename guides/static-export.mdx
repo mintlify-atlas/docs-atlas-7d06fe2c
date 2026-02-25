@@ -1,0 +1,726 @@
+---
+title: Static Export
+description: Generate fully static HTML sites with vinext
+---
+
+# Static Export
+
+vinext supports full static site generation, creating HTML files at build time that can be deployed to any static hosting provider—no server required.
+
+## Overview
+
+Static export renders all pages to HTML at build time, producing a directory of static files:
+
+```
+dist/
+├── index.html
+├── about.html
+├── blog/
+│   ├── post-1.html
+│   └── post-2.html
+├── 404.html
+└── assets/
+    ├── main.js
+    └── main.css
+```
+
+**Benefits**:
+- Deploy to any static host (CDN, S3, GitHub Pages)
+- Maximum performance (no server rendering overhead)
+- Zero infrastructure requirements
+- Perfect for documentation sites, blogs, marketing pages
+
+**Limitations**:
+- No server-side rendering (SSR)
+- No API routes
+- No dynamic routes without `generateStaticParams()` or `getStaticPaths()`
+- No Incremental Static Regeneration (ISR)
+
+## Enable Static Export
+
+Add `output: 'export'` to your Next.js config:
+
+```javascript
+// next.config.js
+module.exports = {
+  output: 'export',
+  trailingSlash: true, // Optional: add trailing slashes to URLs
+};
+```
+
+Then build:
+
+```bash
+vinext build
+```
+
+vinext generates static HTML files in the `dist/` directory.
+
+## Pages Router
+
+### Static Pages
+
+Regular pages are rendered to HTML automatically:
+
+```typescript
+// pages/index.tsx
+export default function Home() {
+  return (
+    <div>
+      <h1>Welcome</h1>
+      <p>This will be static HTML</p>
+    </div>
+  );
+}
+```
+
+Generates `dist/index.html`.
+
+### Pages with Data (getStaticProps)
+
+Fetch data at build time:
+
+```typescript
+// pages/about.tsx
+interface Props {
+  data: { title: string; content: string };
+}
+
+export default function About({ data }: Props) {
+  return (
+    <div>
+      <h1>{data.title}</h1>
+      <p>{data.content}</p>
+    </div>
+  );
+}
+
+export async function getStaticProps() {
+  const data = await fetch('https://api.example.com/about').then(r => r.json());
+  
+  return {
+    props: { data },
+  };
+}
+```
+
+`getStaticProps` runs at build time—the API is called once, and the result is baked into the HTML.
+
+### Dynamic Routes
+
+Dynamic routes require `getStaticPaths` to specify which paths to generate:
+
+```typescript
+// pages/blog/[slug].tsx
+interface Props {
+  post: { slug: string; title: string; content: string };
+}
+
+export default function BlogPost({ post }: Props) {
+  return (
+    <article>
+      <h1>{post.title}</h1>
+      <div dangerouslySetInnerHTML={{ __html: post.content }} />
+    </article>
+  );
+}
+
+export async function getStaticPaths() {
+  const posts = await fetch('https://api.example.com/posts').then(r => r.json());
+  
+  return {
+    paths: posts.map((post: any) => ({
+      params: { slug: post.slug },
+    })),
+    fallback: false, // Must be false for static export
+  };
+}
+
+export async function getStaticProps({ params }) {
+  const post = await fetch(`https://api.example.com/posts/${params.slug}`).then(r => r.json());
+  
+  return {
+    props: { post },
+  };
+}
+```
+
+**Important**: `fallback` must be `false` for static export. No dynamic fallback pages are generated.
+
+### Catch-All Routes
+
+Catch-all routes work the same way:
+
+```typescript
+// pages/docs/[...slug].tsx
+export async function getStaticPaths() {
+  return {
+    paths: [
+      { params: { slug: ['getting-started'] } },
+      { params: { slug: ['api', 'reference'] } },
+      { params: { slug: ['guides', 'deployment', 'cloudflare'] } },
+    ],
+    fallback: false,
+  };
+}
+
+export async function getStaticProps({ params }) {
+  const slug = params.slug.join('/');
+  const doc = await fetchDoc(slug);
+  
+  return {
+    props: { doc },
+  };
+}
+```
+
+Generates:
+- `dist/docs/getting-started.html`
+- `dist/docs/api/reference.html`
+- `dist/docs/guides/deployment/cloudflare.html`
+
+### Not Supported with Static Export
+
+#### getServerSideProps
+
+**Error**: `getServerSideProps` requires a server.
+
+```typescript
+// ❌ This will cause a build error
+export async function getServerSideProps() {
+  return { props: {} };
+}
+```
+
+**Solution**: Use `getStaticProps` instead.
+
+#### API Routes
+
+API routes are skipped with a warning:
+
+```typescript
+// pages/api/hello.ts
+// ⚠️ Skipped during static export
+export default function handler(req, res) {
+  res.json({ message: 'Hello' });
+}
+```
+
+**Alternative**: Use external APIs or serverless functions.
+
+## App Router
+
+### Static Pages
+
+Server Components are rendered at build time:
+
+```typescript
+// app/page.tsx
+export default function Home() {
+  return (
+    <div>
+      <h1>Welcome</h1>
+      <p>This is static HTML</p>
+    </div>
+  );
+}
+```
+
+Generates `dist/index.html`.
+
+### Pages with Data
+
+Server Components can fetch data directly:
+
+```typescript
+// app/about/page.tsx
+async function getData() {
+  const res = await fetch('https://api.example.com/about');
+  return res.json();
+}
+
+export default async function About() {
+  const data = await getData();
+  
+  return (
+    <div>
+      <h1>{data.title}</h1>
+      <p>{data.content}</p>
+    </div>
+  );
+}
+```
+
+The fetch runs at build time, and the result is baked into the HTML.
+
+### Dynamic Routes
+
+Dynamic routes require `generateStaticParams`:
+
+```typescript
+// app/blog/[slug]/page.tsx
+interface Props {
+  params: { slug: string };
+}
+
+export async function generateStaticParams() {
+  const posts = await fetch('https://api.example.com/posts').then(r => r.json());
+  
+  return posts.map((post: any) => ({
+    slug: post.slug,
+  }));
+}
+
+export default async function BlogPost({ params }: Props) {
+  const post = await fetch(`https://api.example.com/posts/${params.slug}`).then(r => r.json());
+  
+  return (
+    <article>
+      <h1>{post.title}</h1>
+      <div dangerouslySetInnerHTML={{ __html: post.content }} />
+    </article>
+  );
+}
+```
+
+### Catch-All Routes
+
+```typescript
+// app/docs/[...slug]/page.tsx
+export async function generateStaticParams() {
+  return [
+    { slug: ['getting-started'] },
+    { slug: ['api', 'reference'] },
+    { slug: ['guides', 'deployment'] },
+  ];
+}
+
+export default async function DocPage({ params }: { params: { slug: string[] } }) {
+  const path = params.slug.join('/');
+  const doc = await fetchDoc(path);
+  
+  return (
+    <article>
+      <h1>{doc.title}</h1>
+      <div dangerouslySetInnerHTML={{ __html: doc.content }} />
+    </article>
+  );
+}
+```
+
+### Nested Dynamic Routes
+
+For nested dynamic segments, use top-down params passing:
+
+```typescript
+// app/[category]/[product]/page.tsx
+
+// Parent generates categories
+export async function generateStaticParams() {
+  return [
+    { category: 'electronics' },
+    { category: 'clothing' },
+  ];
+}
+
+// Child receives parent params and generates products
+export async function generateStaticParams({ params }: { params: { category: string } }) {
+  const products = await fetchProducts(params.category);
+  return products.map(p => ({ product: p.slug }));
+}
+
+export default async function ProductPage({ params }: { params: { category: string; product: string } }) {
+  const product = await fetchProduct(params.category, params.product);
+  return <div>{product.name}</div>;
+}
+```
+
+### Route Handlers (API Routes)
+
+Route handlers are skipped with a warning:
+
+```typescript
+// app/api/hello/route.ts
+// ⚠️ Skipped during static export
+export async function GET() {
+  return Response.json({ message: 'Hello' });
+}
+```
+
+### Static Metadata
+
+Metadata is included in the generated HTML:
+
+```typescript
+// app/blog/[slug]/page.tsx
+import type { Metadata } from 'next';
+
+export async function generateMetadata({ params }: { params: { slug: string } }): Promise<Metadata> {
+  const post = await fetchPost(params.slug);
+  
+  return {
+    title: post.title,
+    description: post.excerpt,
+    openGraph: {
+      title: post.title,
+      description: post.excerpt,
+      images: [post.coverImage],
+    },
+  };
+}
+```
+
+## Build Process
+
+vinext performs the following steps during static export:
+
+<Steps>
+  <Step title="Route Discovery">
+    Scans your `pages/` or `app/` directory to find all routes.
+  </Step>
+
+  <Step title="Path Expansion">
+    For dynamic routes, calls `getStaticPaths()` (Pages Router) or `generateStaticParams()` (App Router) to expand all possible paths.
+  </Step>
+
+  <Step title="Rendering">
+    Renders each route to HTML:
+    - Pages Router: Calls `getStaticProps`, renders with React SSR
+    - App Router: Starts dev server, fetches each URL, saves HTML
+  </Step>
+
+  <Step title="Asset Copying">
+    Copies static assets (JS, CSS, images) from `public/` and Vite build output to `dist/`.
+  </Step>
+
+  <Step title="404 Page">
+    Renders custom 404 page if present, otherwise uses default.
+  </Step>
+</Steps>
+
+## Deployment
+
+### Cloudflare Pages
+
+Deploy the `dist/` directory:
+
+```bash
+npx wrangler pages deploy dist
+```
+
+Or configure automatic deployments via GitHub integration in the Cloudflare dashboard.
+
+### Vercel
+
+```bash
+npm install -g vercel
+vercel --prod
+```
+
+Vercel auto-detects the static output and deploys it.
+
+### Netlify
+
+```bash
+npm install -g netlify-cli
+netlify deploy --prod --dir=dist
+```
+
+Or connect your GitHub repo for automatic deployments.
+
+### GitHub Pages
+
+Add a workflow:
+
+```yaml
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Build
+        run: npm run build
+      
+      - name: Deploy
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist
+```
+
+Configure GitHub Pages to serve from the `gh-pages` branch.
+
+### AWS S3 + CloudFront
+
+```bash
+# Upload to S3
+aws s3 sync dist/ s3://my-bucket --delete
+
+# Invalidate CloudFront cache
+aws cloudfront create-invalidation --distribution-id EDFDVBD6EXAMPLE --paths "/*"
+```
+
+### Nginx
+
+Copy `dist/` to your web server:
+
+```bash
+scp -r dist/* user@server:/var/www/html/
+```
+
+Configure Nginx:
+
+```nginx
+server {
+  listen 80;
+  server_name example.com;
+  root /var/www/html;
+  index index.html;
+
+  location / {
+    try_files $uri $uri.html $uri/ =404;
+  }
+
+  error_page 404 /404.html;
+}
+```
+
+## Advanced Configuration
+
+### Trailing Slash
+
+Control URL format:
+
+```javascript
+module.exports = {
+  output: 'export',
+  trailingSlash: true,
+};
+```
+
+**With `trailingSlash: true`**:
+- `/about` → `dist/about/index.html`
+- Served as `/about/`
+
+**With `trailingSlash: false`** (default):
+- `/about` → `dist/about.html`
+- Served as `/about`
+
+### Base Path
+
+Deploy to a subdirectory:
+
+```javascript
+module.exports = {
+  output: 'export',
+  basePath: '/docs',
+};
+```
+
+All routes are prefixed with `/docs`:
+- `/` → `/docs/`
+- `/about` → `/docs/about`
+
+Links and asset paths are automatically adjusted.
+
+### Image Optimization
+
+Images are **not** optimized in static export. Options:
+
+1. **Disable optimization**:
+   ```javascript
+   module.exports = {
+     output: 'export',
+     images: {
+       unoptimized: true,
+     },
+   };
+   ```
+
+2. **Use a CDN**: Upload images to a CDN that handles optimization (Cloudflare Images, Imgix, Cloudinary)
+
+3. **Optimize at build time**: Use an image optimization tool before deploying
+
+## Common Patterns
+
+### Documentation Site
+
+```typescript
+// app/docs/[...slug]/page.tsx
+import fs from 'fs';
+import path from 'path';
+import { marked } from 'marked';
+
+export async function generateStaticParams() {
+  const docsDir = path.join(process.cwd(), 'content/docs');
+  const files = getAllMarkdownFiles(docsDir);
+  
+  return files.map(file => ({
+    slug: file.replace('.md', '').split('/'),
+  }));
+}
+
+export default async function DocPage({ params }: { params: { slug: string[] } }) {
+  const filePath = path.join(process.cwd(), 'content/docs', ...params.slug) + '.md';
+  const content = fs.readFileSync(filePath, 'utf-8');
+  const html = marked(content);
+  
+  return <div dangerouslySetInnerHTML={{ __html: html }} />;
+}
+```
+
+### Blog with Pagination
+
+```typescript
+// app/blog/page/[page]/page.tsx
+const POSTS_PER_PAGE = 10;
+
+export async function generateStaticParams() {
+  const posts = await fetchAllPosts();
+  const pageCount = Math.ceil(posts.length / POSTS_PER_PAGE);
+  
+  return Array.from({ length: pageCount }, (_, i) => ({
+    page: String(i + 1),
+  }));
+}
+
+export default async function BlogPage({ params }: { params: { page: string } }) {
+  const page = parseInt(params.page);
+  const posts = await fetchPosts(page, POSTS_PER_PAGE);
+  
+  return (
+    <div>
+      {posts.map(post => (
+        <article key={post.id}>
+          <h2>{post.title}</h2>
+          <p>{post.excerpt}</p>
+        </article>
+      ))}
+    </div>
+  );
+}
+```
+
+### Multi-Language Site
+
+```typescript
+// app/[lang]/page.tsx
+export async function generateStaticParams() {
+  return [
+    { lang: 'en' },
+    { lang: 'fr' },
+    { lang: 'de' },
+  ];
+}
+
+export default async function HomePage({ params }: { params: { lang: string } }) {
+  const content = await loadContent(params.lang);
+  
+  return <div>{content}</div>;
+}
+```
+
+## Troubleshooting
+
+### Build Error: getServerSideProps Not Supported
+
+**Error**: `Page uses getServerSideProps which is not supported with output: 'export'`
+
+**Solution**: Replace `getServerSideProps` with `getStaticProps`. Server-side rendering requires a server.
+
+### Build Error: Dynamic Route Missing Paths
+
+**Error**: `Dynamic route requires getStaticPaths with output: 'export'`
+
+**Solution**: Add `getStaticPaths` (Pages Router) or `generateStaticParams` (App Router):
+
+```typescript
+export async function generateStaticParams() {
+  return [{ slug: 'example' }];
+}
+```
+
+### 404 on Dynamic Routes
+
+**Problem**: Dynamic routes return 404 after deployment
+
+**Solution**: Most static hosts expect `.html` files. Configure your host to:
+- Append `.html` to paths without extensions
+- Use a rewrite rule: `/blog/post-1` → `/blog/post-1.html`
+
+Or enable trailing slashes:
+
+```javascript
+module.exports = {
+  trailingSlash: true,
+};
+```
+
+This generates `/blog/post-1/index.html` which is served as `/blog/post-1/` by default.
+
+### Large Build Time
+
+**Problem**: Static export takes a long time
+
+**Solution**: You're generating many pages. Options:
+- Reduce the number of pages generated
+- Use ISR instead (requires a server)
+- Deploy to Cloudflare Workers for on-demand rendering
+
+### Data Not Updating
+
+**Problem**: Content changes don't appear after deployment
+
+**Solution**: Static export bakes data at build time. To update:
+1. Rebuild: `vinext build`
+2. Redeploy the new `dist/` directory
+
+For frequently-changing data, use client-side fetching instead:
+
+```typescript
+'use client';
+import { useEffect, useState } from 'react';
+
+export default function Page() {
+  const [data, setData] = useState(null);
+  
+  useEffect(() => {
+    fetch('https://api.example.com/data')
+      .then(r => r.json())
+      .then(setData);
+  }, []);
+  
+  return <div>{data?.message}</div>;
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Deployment Guide" icon="rocket" href="/guides/deployment">
+    Deploy your static site to production
+  </Card>
+  <Card title="Configuration" icon="sliders" href="/guides/configuration">
+    Customize build and export settings
+  </Card>
+  <Card title="Cloudflare Pages" icon="cloud" href="https://pages.cloudflare.com">
+    Deploy to Cloudflare Pages
+  </Card>
+  <Card title="Examples" icon="code" href="https://github.com/cloudflare/vinext/tree/main/examples">
+    Explore static export examples
+  </Card>
+</CardGroup>

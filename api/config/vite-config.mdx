@@ -1,0 +1,327 @@
+---
+title: vite.config.ts
+description: Vite configuration for vinext projects
+---
+
+# Vite Configuration
+
+For basic usage, vinext auto-detects your `app/` or `pages/` directory and generates a Vite config automatically. No `vite.config.ts` required.
+
+For advanced usage (custom plugins, Cloudflare Workers deployment, build options), create a `vite.config.ts` file.
+
+## Basic Configuration
+
+### Pages Router
+
+```ts filename="vite.config.ts"
+import { defineConfig } from 'vite'
+import vinext from 'vinext'
+
+export default defineConfig({
+  plugins: [vinext()]
+})
+```
+
+### App Router (Development)
+
+For local development with App Router:
+
+```ts filename="vite.config.ts"
+import { defineConfig } from 'vite'
+import vinext from 'vinext'
+import rsc from '@vitejs/plugin-rsc'
+
+export default defineConfig({
+  plugins: [
+    vinext(),
+    rsc({
+      entries: {
+        rsc: 'virtual:vinext-rsc-entry',
+        ssr: 'virtual:vinext-app-ssr-entry',
+        client: 'virtual:vinext-app-browser-entry'
+      }
+    })
+  ]
+})
+```
+
+### App Router (Cloudflare Workers)
+
+For Cloudflare Workers deployment:
+
+```ts filename="vite.config.ts"
+import { defineConfig } from 'vite'
+import vinext from 'vinext'
+import rsc from '@vitejs/plugin-rsc'
+import { cloudflare } from '@cloudflare/vite-plugin'
+
+export default defineConfig({
+  plugins: [
+    vinext(),
+    rsc({
+      entries: {
+        rsc: 'virtual:vinext-rsc-entry',
+        ssr: 'virtual:vinext-app-ssr-entry',
+        client: 'virtual:vinext-app-browser-entry'
+      }
+    }),
+    cloudflare({
+      viteEnvironment: {
+        name: 'rsc',
+        childEnvironments: ['ssr']
+      }
+    })
+  ]
+})
+```
+
+## vinext Plugin Options
+
+The `vinext()` plugin accepts no configuration options. It reads your `next.config.js` automatically.
+
+```ts
+import vinext from 'vinext'
+
+export default defineConfig({
+  plugins: [vinext()]
+})
+```
+
+## Common Customizations
+
+### Path Aliases
+
+vinext respects your `tsconfig.json` path aliases. For manual configuration:
+
+```ts filename="vite.config.ts"
+import { defineConfig } from 'vite'
+import vinext from 'vinext'
+import tsconfigPaths from 'vite-tsconfig-paths'
+
+export default defineConfig({
+  plugins: [vinext(), tsconfigPaths()],
+  resolve: {
+    alias: {
+      '@': '/src',
+      '@components': '/src/components'
+    }
+  }
+})
+```
+
+### MDX Support
+
+vinext auto-detects `@next/mdx` in your `next.config.js` and injects `@mdx-js/rollup` automatically. For manual configuration:
+
+```ts filename="vite.config.ts"
+import { defineConfig } from 'vite'
+import vinext from 'vinext'
+import mdx from '@mdx-js/rollup'
+import remarkGfm from 'remark-gfm'
+import rehypeHighlight from 'rehype-highlight'
+
+export default defineConfig({
+  plugins: [
+    vinext(),
+    mdx({
+      remarkPlugins: [remarkGfm],
+      rehypePlugins: [rehypeHighlight]
+    })
+  ]
+})
+```
+
+### Environment Variables
+
+Environment variables with the `NEXT_PUBLIC_` prefix are exposed to the client automatically:
+
+```bash filename=".env.local"
+NEXT_PUBLIC_API_URL=https://api.example.com
+SECRET_KEY=abc123
+```
+
+Access in your code:
+
+```ts
+// Client-side (works)
+const apiUrl = process.env.NEXT_PUBLIC_API_URL
+
+// Server-side only
+const secret = process.env.SECRET_KEY
+```
+
+### Build Options
+
+```ts filename="vite.config.ts"
+import { defineConfig } from 'vite'
+import vinext from 'vinext'
+
+export default defineConfig({
+  plugins: [vinext()],
+  build: {
+    target: 'es2020',
+    minify: 'esbuild',
+    sourcemap: true,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          vendor: ['react', 'react-dom']
+        }
+      }
+    }
+  }
+})
+```
+
+### CSS Processing
+
+```ts filename="vite.config.ts"
+import { defineConfig } from 'vite'
+import vinext from 'vinext'
+
+export default defineConfig({
+  plugins: [vinext()],
+  css: {
+    modules: {
+      localsConvention: 'camelCase'
+    },
+    preprocessorOptions: {
+      scss: {
+        additionalData: '@import "@/styles/variables.scss";'
+      }
+    }
+  }
+})
+```
+
+### PostCSS Configuration
+
+vinext loads `postcss.config.js` automatically. When using ESM (`"type": "module"`), rename CJS config files to `.cjs`:
+
+```js filename="postcss.config.cjs"
+module.exports = {
+  plugins: {
+    tailwindcss: {},
+    autoprefixer: {}
+  }
+}
+```
+
+## Virtual Modules
+
+vinext provides virtual entry points for the RSC plugin:
+
+- `virtual:vinext-rsc-entry` - RSC environment entry (react-server)
+- `virtual:vinext-app-ssr-entry` - SSR environment entry (node/workers)
+- `virtual:vinext-app-browser-entry` - Client environment entry (browser)
+- `virtual:vinext-server-entry` - Pages Router server entry
+
+These are generated automatically and should not be imported directly in your code.
+
+## Multi-Environment Builds
+
+App Router uses `@vitejs/plugin-rsc` for multi-environment builds:
+
+1. **RSC environment** (`rsc`) - React Server Components rendering
+2. **SSR environment** (`ssr`) - HTML generation
+3. **Client environment** (`client`) - Browser hydration
+
+The RSC plugin orchestrates these builds automatically. Use `vinext build` (not `vite build` directly).
+
+## Production Build
+
+Always use the vinext CLI for production builds:
+
+```bash
+vinext build
+```
+
+Do not use `vite build` or `vite build --ssr` directly. The vinext CLI calls `createBuilder()` which runs the 5-step multi-environment build pipeline.
+
+## Common Patterns
+
+### Tailwind CSS
+
+```ts filename="vite.config.ts"
+import { defineConfig } from 'vite'
+import vinext from 'vinext'
+
+export default defineConfig({
+  plugins: [vinext()]
+})
+```
+
+```js filename="postcss.config.cjs"
+module.exports = {
+  plugins: {
+    tailwindcss: {},
+    autoprefixer: {}
+  }
+}
+```
+
+```js filename="tailwind.config.js"
+export default {
+  content: ['./app/**/*.{js,ts,jsx,tsx}', './pages/**/*.{js,ts,jsx,tsx}'],
+  theme: { extend: {} },
+  plugins: []
+}
+```
+
+### Bundle Analysis
+
+```ts filename="vite.config.ts"
+import { defineConfig } from 'vite'
+import vinext from 'vinext'
+import { visualizer } from 'rollup-plugin-visualizer'
+
+export default defineConfig({
+  plugins: [
+    vinext(),
+    visualizer({ open: true, gzipSize: true })
+  ]
+})
+```
+
+### Custom Server Middleware
+
+Use Vite's `configureServer` hook:
+
+```ts filename="vite.config.ts"
+import { defineConfig } from 'vite'
+import vinext from 'vinext'
+
+export default defineConfig({
+  plugins: [
+    vinext(),
+    {
+      name: 'custom-middleware',
+      configureServer(server) {
+        server.middlewares.use((req, res, next) => {
+          // Custom dev server middleware
+          console.log(`[${req.method}] ${req.url}`)
+          next()
+        })
+      }
+    }
+  ]
+})
+```
+
+## Migrating from Next.js
+
+If you have `next.config.js` options that need Vite equivalents:
+
+| Next.js | Vite |
+|---------|------|
+| `webpack.resolve.alias` | `resolve.alias` |
+| `webpack.module.rules` | Vite plugins |
+| `experimental.serverComponentsExternalPackages` | `ssr.noExternal` / `ssr.external` |
+| `transpilePackages` | `optimizeDeps.include` |
+| `env` | `.env` files + `NEXT_PUBLIC_` prefix |
+
+## Related
+
+- [next.config.js](/api/config/next-config) - Next.js configuration
+- [Route Segment Config](/api/config/route-segment) - Per-route configuration
+- [Vite Documentation](https://vitejs.dev/config/) - Official Vite config reference

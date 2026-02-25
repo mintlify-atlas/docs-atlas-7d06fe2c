@@ -1,0 +1,467 @@
+---
+title: File-System Routing
+description: How vinext implements Next.js file-system routing for both Pages and App Router
+---
+
+vinext implements Next.js file-system routing conventions for both the Pages Router and App Router. Routes are discovered by scanning the `pages/` and `app/` directories at startup and hot-reloaded when files change.
+
+## Pages Router
+
+The Pages Router follows the original Next.js routing conventions:
+
+### Basic Routes
+
+| File | Route |
+|------|-------|
+| `pages/index.tsx` | `/` |
+| `pages/about.tsx` | `/about` |
+| `pages/blog/index.tsx` | `/blog` |
+| `pages/blog/first-post.tsx` | `/blog/first-post` |
+
+### Dynamic Routes
+
+Dynamic segments are defined using square brackets:
+
+| File | Route Pattern | Example Match |
+|------|---------------|---------------|
+| `pages/posts/[id].tsx` | `/posts/:id` | `/posts/123` |
+| `pages/blog/[year]/[month].tsx` | `/blog/:year/:month` | `/blog/2024/03` |
+
+```tsx pages/posts/[id].tsx
+import { useRouter } from 'next/router';
+
+export default function Post() {
+  const router = useRouter();
+  const { id } = router.query;
+  
+  return <div>Post ID: {id}</div>;
+}
+```
+
+### Catch-All Routes
+
+Catch-all routes capture multiple segments:
+
+| File | Route Pattern | Example Match |
+|------|---------------|---------------|
+| `pages/docs/[...slug].tsx` | `/docs/:slug+` | `/docs/api/reference` |
+| `pages/[[...slug]].tsx` | `/:slug*` | `/` or `/any/path` |
+
+<CodeGroup>
+```tsx pages/docs/[...slug].tsx
+// Required catch-all — must have at least one segment
+export default function Docs() {
+  const router = useRouter();
+  const { slug } = router.query; // ['api', 'reference']
+  
+  return <div>Path: {slug.join('/')}</div>;
+}
+```
+
+```tsx pages/[[...slug]].tsx
+// Optional catch-all — matches root too
+export default function CatchAll() {
+  const router = useRouter();
+  const { slug = [] } = router.query;
+  
+  return <div>Segments: {slug.length}</div>;
+}
+```
+</CodeGroup>
+
+### API Routes
+
+API routes are defined in `pages/api/`:
+
+```tsx pages/api/hello.ts
+import type { NextApiRequest, NextApiResponse } from 'next';
+
+export default function handler(req: NextApiRequest, res: NextApiResponse) {
+  res.status(200).json({ message: 'Hello World' });
+}
+```
+
+### Route Precedence
+
+vinext matches routes following Next.js specificity rules:
+
+1. **Static routes** (most specific)
+2. **Dynamic routes** (by position — earlier is more specific)
+3. **Catch-all routes**
+4. **Optional catch-all** (least specific)
+
+```
+/blog/latest        ← Static — highest priority
+/blog/:id           ← Dynamic
+/blog/:category/:id ← Dynamic (more segments = more specific)
+/blog/:slug+        ← Catch-all
+/:slug*             ← Optional catch-all — lowest priority
+```
+
+## App Router
+
+The App Router introduces a more powerful routing system with layouts, loading states, and parallel routes.
+
+### File Conventions
+
+| File | Purpose |
+|------|----------|
+| `page.tsx` | Page component (defines a route) |
+| `layout.tsx` | Layout wrapping children |
+| `template.tsx` | Re-mounting layout |
+| `loading.tsx` | Loading UI (Suspense fallback) |
+| `error.tsx` | Error boundary |
+| `not-found.tsx` | 404 page |
+| `forbidden.tsx` | 403 page |
+| `unauthorized.tsx` | 401 page |
+| `route.ts` | API route handler |
+
+### Basic Routes
+
+```
+app/
+  page.tsx           → /
+  about/
+    page.tsx         → /about
+  blog/
+    page.tsx         → /blog
+    [slug]/
+      page.tsx       → /blog/:slug
+```
+
+### Layouts
+
+Layouts wrap multiple pages and persist across navigation:
+
+<CodeGroup>
+```tsx app/layout.tsx
+// Root layout — wraps entire app
+export default function RootLayout({ children }) {
+  return (
+    <html>
+      <body>
+        <nav>Global Navigation</nav>
+        {children}
+      </body>
+    </html>
+  );
+}
+```
+
+```tsx app/dashboard/layout.tsx
+// Nested layout — wraps /dashboard/* routes
+export default function DashboardLayout({ children }) {
+  return (
+    <div>
+      <aside>Dashboard Sidebar</aside>
+      <main>{children}</main>
+    </div>
+  );
+}
+```
+</CodeGroup>
+
+When navigating from `/dashboard/analytics` to `/dashboard/settings`, the dashboard layout persists — only the page component re-renders.
+
+### Route Groups
+
+Route groups organize files without affecting the URL structure:
+
+```
+app/
+  (marketing)/
+    page.tsx          → /
+    about/
+      page.tsx        → /about
+    layout.tsx        ← Shared layout for marketing pages
+  (app)/
+    dashboard/
+      page.tsx        → /dashboard
+    layout.tsx        ← Shared layout for app pages
+```
+
+Route groups (denoted by parentheses) are invisible in URLs but allow multiple layouts at the same level.
+
+### Dynamic Routes
+
+Dynamic routes work the same as Pages Router:
+
+```tsx app/posts/[id]/page.tsx
+export default async function Post({ params }) {
+  // In Next.js 15+, params is a Promise
+  const { id } = await params;
+  
+  return <div>Post {id}</div>;
+}
+```
+
+<Note>
+  vinext supports both `await params` (Next.js 15+) and direct property access `params.id` (pre-15) via thenable objects.
+</Note>
+
+### Parallel Routes
+
+Parallel routes allow rendering multiple pages in the same layout:
+
+```
+app/
+  dashboard/
+    @analytics/
+      page.tsx        ← Named slot
+    @team/
+      page.tsx        ← Named slot
+    page.tsx          ← Default slot (children)
+    layout.tsx
+```
+
+```tsx app/dashboard/layout.tsx
+export default function Layout({ children, analytics, team }) {
+  return (
+    <div>
+      <div>{children}</div>
+      <div>{analytics}</div>
+      <div>{team}</div>
+    </div>
+  );
+}
+```
+
+Slots are passed as props to the layout at their directory level. If a slot doesn't have a matching page for a route, `default.tsx` is rendered:
+
+```tsx app/dashboard/@analytics/default.tsx
+export default function AnalyticsDefault() {
+  return <div>Select a dashboard to view analytics</div>;
+}
+```
+
+### Intercepting Routes
+
+Intercepting routes allow showing a different page when navigating from within the app:
+
+```
+app/
+  feed/
+    @modal/
+      (..)photos/
+        [id]/
+          page.tsx    ← Intercepts /photos/:id when navigating from /feed
+    page.tsx
+  photos/
+    [id]/
+      page.tsx        ← Regular route (direct navigation or refresh)
+```
+
+Interception conventions:
+
+| Convention | Meaning |
+|------------|----------|
+| `(.)` | Same level |
+| `(..)` | One level up |
+| `(..)(..)` | Two levels up |
+| `(...)` | App root |
+
+```tsx app/feed/@modal/(.)photos/[id]/page.tsx
+// This renders in a modal when navigating from /feed to /photos/123
+export default async function PhotoModal({ params }) {
+  const { id } = await params;
+  return <Modal><Photo id={id} /></Modal>;
+}
+```
+
+Refreshing the page or direct navigation to `/photos/123` renders the regular route instead.
+
+## Route Matching Implementation
+
+vinext converts Next.js file conventions to internal URL patterns:
+
+```typescript packages/vinext/src/routing/pages-router.ts
+function fileToRoute(file: string, pagesDir: string): Route | null {
+  // Remove extension
+  const withoutExt = file.replace(/\.(tsx?|jsx?)$/, "");
+  const segments = withoutExt.split(path.sep);
+
+  // Handle index files: pages/index.tsx -> /
+  if (segments[segments.length - 1] === "index") {
+    segments.pop();
+  }
+
+  const params: string[] = [];
+  let isDynamic = false;
+
+  const urlSegments = segments.map((segment) => {
+    // Catch-all: [...slug] -> :slug+
+    const catchAllMatch = segment.match(/^\[\.\.\.(\w+)\]$/);
+    if (catchAllMatch) {
+      isDynamic = true;
+      params.push(catchAllMatch[1]);
+      return `:${catchAllMatch[1]}+`;
+    }
+
+    // Optional catch-all: [[...slug]] -> :slug*
+    const optionalCatchAllMatch = segment.match(/^\[\[\.\.\.(\w+)\]\]$/);
+    if (optionalCatchAllMatch) {
+      isDynamic = true;
+      params.push(optionalCatchAllMatch[1]);
+      return `:${optionalCatchAllMatch[1]}*`;
+    }
+
+    // Dynamic segment: [id] -> :id
+    const dynamicMatch = segment.match(/^\[(\w+)\]$/);
+    if (dynamicMatch) {
+      isDynamic = true;
+      params.push(dynamicMatch[1]);
+      return `:${dynamicMatch[1]}`;
+    }
+
+    return segment;
+  });
+
+  const pattern = "/" + urlSegments.join("/");
+
+  return {
+    pattern: pattern === "/" ? "/" : pattern,
+    filePath: path.join(pagesDir, file),
+    isDynamic,
+    params,
+  };
+}
+```
+
+### Precedence Scoring
+
+Routes are sorted by specificity using a scoring algorithm:
+
+```typescript packages/vinext/src/routing/pages-router.ts
+function routePrecedence(pattern: string): number {
+  const parts = pattern.split("/").filter(Boolean);
+  let score = 0;
+  
+  for (let i = 0; i < parts.length; i++) {
+    const p = parts[i];
+    if (p.endsWith("+")) {
+      score += 10000 + i; // catch-all: high penalty
+    } else if (p.endsWith("*")) {
+      score += 20000 + i; // optional catch-all: highest penalty
+    } else if (p.startsWith(":")) {
+      score += 100 + i; // dynamic: moderate penalty by position
+    }
+    // static segments contribute nothing (better specificity)
+  }
+  return score;
+}
+```
+
+Lower scores = higher priority. Static segments don't add to the score, making them most specific.
+
+## Route Discovery
+
+Routes are discovered at startup and cached:
+
+```typescript packages/vinext/src/routing/pages-router.ts
+const routeCache = new Map<string, { routes: Route[]; promise: Promise<Route[]> }>();
+
+export async function pagesRouter(pagesDir: string): Promise<Route[]> {
+  const cacheKey = `pages:${pagesDir}`;
+  const cached = routeCache.get(cacheKey);
+  if (cached) return cached.promise;
+
+  const promise = scanPageRoutes(pagesDir);
+  routeCache.set(cacheKey, { routes: [], promise });
+  const routes = await promise;
+  routeCache.set(cacheKey, { routes, promise });
+  return routes;
+}
+```
+
+The cache is invalidated when files are added or removed:
+
+```typescript
+export function invalidateRouteCache(pagesDir: string): void {
+  routeCache.delete(`pages:${pagesDir}`);
+  routeCache.delete(`api:${pagesDir}`);
+}
+```
+
+The Vite plugin sets up a file watcher that calls `invalidateRouteCache()` when the directory structure changes.
+
+## i18n Routing
+
+vinext supports internationalized routing for Pages Router:
+
+```js next.config.js
+module.exports = {
+  i18n: {
+    locales: ['en', 'fr', 'de'],
+    defaultLocale: 'en',
+  },
+};
+```
+
+This enables locale prefixes automatically:
+
+- `/` → default locale (en)
+- `/fr` → French
+- `/fr/about` → French about page
+
+The `useRouter()` hook exposes the current locale:
+
+```tsx
+import { useRouter } from 'next/router';
+
+export default function Page() {
+  const router = useRouter();
+  return <div>Locale: {router.locale}</div>;
+}
+```
+
+<Note>
+  Domain-based i18n routing is not supported. Only path-based locale prefixes work.
+</Note>
+
+## basePath
+
+Deploy your app under a URL prefix:
+
+```js next.config.js
+module.exports = {
+  basePath: '/docs',
+};
+```
+
+All routes are automatically prefixed:
+
+- `pages/index.tsx` → `/docs`
+- `pages/getting-started.tsx` → `/docs/getting-started`
+- Links and navigation respect the basePath automatically
+
+## trailingSlash
+
+Force URLs to end with or without a trailing slash:
+
+```js next.config.js
+module.exports = {
+  trailingSlash: true,
+};
+```
+
+vinext issues 308 redirects to the canonical form:
+
+- `/about` → `/about/` (with `trailingSlash: true`)
+- `/about/` → `/about` (with `trailingSlash: false`)
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Server Components" icon="server" href="/concepts/server-components">
+    Learn how RSC integration works in App Router
+  </Card>
+  <Card title="Caching & ISR" icon="database" href="/concepts/caching">
+    Understand incremental static regeneration
+  </Card>
+  <Card title="Architecture" icon="diagram-project" href="/concepts/architecture">
+    Deep dive into vinext's architecture
+  </Card>
+  <Card title="API Routes" icon="code" href="/api/route-handlers">
+    Build API endpoints
+  </Card>
+</CardGroup>

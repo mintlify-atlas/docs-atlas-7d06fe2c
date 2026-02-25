@@ -1,0 +1,461 @@
+---
+title: next.config.js/ts
+description: Complete reference for next.config.js/ts configuration options in vinext
+---
+
+# next.config.js/ts Configuration
+
+vinext loads and parses your existing `next.config.js`, `next.config.ts`, `next.config.mjs`, or `next.config.cjs` file automatically. The configuration is loaded at both dev and build time.
+
+## Configuration File
+
+Create a configuration file in your project root:
+
+```ts filename="next.config.ts"
+import type { NextConfig } from 'vinext'
+
+export default {
+  basePath: '/app',
+  trailingSlash: true,
+  env: {
+    CUSTOM_KEY: 'value'
+  },
+  images: {
+    remotePatterns: [
+      {
+        protocol: 'https',
+        hostname: 'example.com',
+        pathname: '/images/**'
+      }
+    ]
+  }
+} satisfies NextConfig
+```
+
+### Function Form
+
+Configs can be functions that receive phase and default config:
+
+```js filename="next.config.js"
+module.exports = (phase, { defaultConfig }) => {
+  if (phase === 'phase-development-server') {
+    return {
+      // Development-only config
+      env: { DEV_MODE: 'true' }
+    }
+  }
+
+  return {
+    // Production config
+    env: { PROD_MODE: 'true' }
+  }
+}
+```
+
+## Configuration Options
+
+### env
+
+Type: `Record<string, string>`
+
+Additional environment variables to expose to the application. These are inlined at build time.
+
+```ts
+export default {
+  env: {
+    API_URL: 'https://api.example.com',
+    VERSION: '1.0.0'
+  }
+}
+```
+
+### basePath
+
+Type: `string`
+
+URL path prefix for your application. All routes, links, and assets are automatically prefixed.
+
+```ts
+export default {
+  basePath: '/docs'
+}
+```
+
+- Routes: `/docs/about`, `/docs/api/users`
+- Links: `<Link href="/about">` renders as `/docs/about`
+- Assets: `/logo.png` becomes `/docs/logo.png`
+
+### trailingSlash
+
+Type: `boolean`  
+Default: `false`
+
+Whether to add trailing slashes to URLs. When enabled, vinext issues 308 redirects to the canonical form.
+
+```ts
+export default {
+  trailingSlash: true
+}
+```
+
+With `trailingSlash: true`:
+- `/about` → 308 redirect to `/about/`
+- `/api/users` → 308 redirect to `/api/users/`
+
+### i18n
+
+Type: `NextI18nConfig | undefined`
+
+Internationalization routing configuration (Pages Router only).
+
+```ts
+export default {
+  i18n: {
+    locales: ['en', 'fr', 'de'],
+    defaultLocale: 'en',
+    localeDetection: true,
+    domains: [
+      {
+        domain: 'example.com',
+        defaultLocale: 'en'
+      },
+      {
+        domain: 'example.fr',
+        defaultLocale: 'fr'
+      }
+    ]
+  }
+}
+```
+
+#### i18n Options
+
+**`locales`** (required)  
+Type: `string[]`  
+List of supported locales.
+
+**`defaultLocale`** (required)  
+Type: `string`  
+Default locale used when no locale prefix is in the URL.
+
+**`localeDetection`**  
+Type: `boolean`  
+Default: `true`  
+Auto-detect locale from `Accept-Language` header.
+
+**`domains`**  
+Type: `Array<{ domain: string; defaultLocale: string; locales?: string[]; http?: boolean }>`  
+Domain-based locale routing.
+
+<Warning>
+Domain-based routing is partially supported. URL-based locale prefixes and `Accept-Language` detection work fully.
+</Warning>
+
+### redirects
+
+Type: `() => Promise<NextRedirect[]> | NextRedirect[]`
+
+URL redirect rules. Supports async functions.
+
+```ts
+export default {
+  async redirects() {
+    return [
+      {
+        source: '/old-blog/:slug',
+        destination: '/blog/:slug',
+        permanent: true
+      },
+      {
+        source: '/admin',
+        destination: '/login',
+        permanent: false,
+        has: [
+          {
+            type: 'cookie',
+            key: 'authorized',
+            value: 'true'
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+#### Redirect Options
+
+**`source`** (required)  
+Type: `string`  
+URL pattern to match. Supports route parameters (`:param`) and wildcards (`*`).
+
+**`destination`** (required)  
+Type: `string`  
+Redirect target URL. Can reference captured parameters.
+
+**`permanent`** (required)  
+Type: `boolean`  
+`true` = 308 redirect, `false` = 307 redirect.
+
+**`has`**  
+Type: `HasCondition[]`  
+Conditional matching based on headers, cookies, query params, or host.
+
+**`missing`**  
+Type: `HasCondition[]`  
+Inverse of `has` — match when conditions are NOT present.
+
+#### HasCondition
+
+```ts
+interface HasCondition {
+  type: 'header' | 'cookie' | 'query' | 'host'
+  key: string
+  value?: string
+}
+```
+
+### rewrites
+
+Type: `() => Promise<NextRewrite[] | RewriteObject> | NextRewrite[] | RewriteObject`
+
+URL rewrite rules. Rewrites change the request path without changing the browser URL.
+
+```ts
+export default {
+  async rewrites() {
+    return [
+      {
+        source: '/blog/:slug',
+        destination: '/posts/:slug'
+      }
+    ]
+  }
+}
+```
+
+#### Phased Rewrites
+
+Control when rewrites run relative to file-system routes:
+
+```ts
+export default {
+  async rewrites() {
+    return {
+      beforeFiles: [
+        // Runs before checking file system
+        { source: '/api/:path*', destination: 'https://api.example.com/:path*' }
+      ],
+      afterFiles: [
+        // Runs after file system check
+        { source: '/fallback/:path*', destination: '/api/fallback' }
+      ],
+      fallback: [
+        // Runs if no page matched
+        { source: '/:path*', destination: '/404' }
+      ]
+    }
+  }
+}
+```
+
+#### Rewrite Options
+
+Same as redirects except no `permanent` field.
+
+### headers
+
+Type: `() => Promise<NextHeader[]> | NextHeader[]`
+
+Custom HTTP response headers.
+
+```ts
+export default {
+  async headers() {
+    return [
+      {
+        source: '/api/:path*',
+        headers: [
+          { key: 'Access-Control-Allow-Origin', value: '*' },
+          { key: 'Access-Control-Allow-Methods', value: 'GET,POST,PUT,DELETE' }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### images
+
+Type: `ImageConfig`
+
+Image optimization configuration.
+
+```ts
+export default {
+  images: {
+    remotePatterns: [
+      {
+        protocol: 'https',
+        hostname: 'cdn.example.com',
+        port: '',
+        pathname: '/images/**',
+        search: ''
+      }
+    ],
+    domains: ['example.com', 'cdn.example.com'],
+    unoptimized: false
+  }
+}
+```
+
+#### Image Options
+
+**`remotePatterns`**  
+Type: `Array<{ protocol?: string; hostname: string; port?: string; pathname?: string; search?: string }>`  
+Allowed remote image patterns.
+
+**`domains`**  
+Type: `string[]`  
+Legacy alternative to `remotePatterns`. Simple hostname allowlist.
+
+**`unoptimized`**  
+Type: `boolean`  
+Default: `false`  
+Disable image optimization entirely.
+
+<Note>
+Remote images work via [@unpic/react](https://unpic.pics) (28 CDN providers). Local images use `<img>` with srcSet. No build-time optimization occurs.
+</Note>
+
+### output
+
+Type: `'export' | 'standalone' | undefined`
+
+Build output mode.
+
+- `'export'`: Static export (all routes pre-rendered to HTML)
+- `'standalone'`: Single server bundle (default for `vinext build`)
+- `undefined`: Standard build
+
+```ts
+export default {
+  output: 'export'
+}
+```
+
+### cacheComponents
+
+Type: `boolean`  
+Default: `false`
+
+Enable Cache Components (Next.js 16+). When `true`, enables the `"use cache"` directive for pages, components, and functions.
+
+```ts
+export default {
+  cacheComponents: true
+}
+```
+
+Replaces the removed `experimental.ppr` and `experimental.dynamicIO` flags.
+
+### transpilePackages
+
+Type: `string[]`
+
+Packages to transpile. Vite handles this natively via `optimizeDeps.include`.
+
+```ts
+export default {
+  transpilePackages: ['@acme/ui', 'lodash-es']
+}
+```
+
+## Loading Behavior
+
+vinext searches for config files in this order:
+
+1. `next.config.ts`
+2. `next.config.mjs`
+3. `next.config.js`
+4. `next.config.cjs`
+
+### ESM vs CJS
+
+vinext attempts ESM dynamic import first. If the file uses CJS constructs (`require`, `module.exports`), it falls back to `createRequire` for proper CommonJS loading.
+
+This ensures compatibility with plugin wrappers like `@next/mdx` and Nextra.
+
+## Type Definitions
+
+### NextConfig
+
+```ts
+export interface NextConfig {
+  env?: Record<string, string>
+  basePath?: string
+  trailingSlash?: boolean
+  i18n?: NextI18nConfig
+  redirects?: () => Promise<NextRedirect[]> | NextRedirect[]
+  rewrites?: () =>
+    | Promise<NextRewrite[] | RewriteObject>
+    | NextRewrite[]
+    | RewriteObject
+  headers?: () => Promise<NextHeader[]> | NextHeader[]
+  images?: ImageConfig
+  output?: 'export' | 'standalone'
+  cacheComponents?: boolean
+  transpilePackages?: string[]
+  webpack?: unknown
+  [key: string]: unknown
+}
+```
+
+### ResolvedNextConfig
+
+Fully resolved configuration with all async values awaited:
+
+```ts
+export interface ResolvedNextConfig {
+  env: Record<string, string>
+  basePath: string
+  trailingSlash: boolean
+  output: '' | 'export' | 'standalone'
+  cacheComponents: boolean
+  redirects: NextRedirect[]
+  rewrites: {
+    beforeFiles: NextRewrite[]
+    afterFiles: NextRewrite[]
+    fallback: NextRewrite[]
+  }
+  headers: NextHeader[]
+  images: ImageConfig | undefined
+  i18n: NextI18nConfig | null
+  mdx: MdxOptions | null
+  serverActionsAllowedOrigins: string[]
+}
+```
+
+## Functions
+
+### loadNextConfig
+
+```ts
+function loadNextConfig(root: string): Promise<NextConfig | null>
+```
+
+Loads the Next.js config file from the project root. Returns `null` if no config file is found.
+
+### resolveNextConfig
+
+```ts
+function resolveNextConfig(config: NextConfig | null): Promise<ResolvedNextConfig>
+```
+
+Resolves a `NextConfig` into a fully-resolved `ResolvedNextConfig`. Awaits async functions for redirects, rewrites, and headers.
+
+## Related
+
+- [Vite Configuration](/api/config/vite-config) - Vite-specific config options
+- [Route Segment Config](/api/config/route-segment) - Per-route configuration
+- [Deploying to Cloudflare](/deploy/cloudflare) - Cloudflare Workers deployment

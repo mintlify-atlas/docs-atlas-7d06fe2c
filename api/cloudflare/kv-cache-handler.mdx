@@ -1,0 +1,408 @@
+---
+title: KV Cache Handler
+description: Cloudflare KV-backed cache handler for ISR and cache persistence
+---
+
+# KV Cache Handler
+
+The `KVCacheHandler` provides persistent ISR caching on Cloudflare Workers using KV as the storage backend. It supports time-based expiry (stale-while-revalidate) and tag-based invalidation.
+
+## Installation
+
+The KV cache handler is included with vinext:
+
+```ts
+import { KVCacheHandler } from 'vinext/cloudflare'
+```
+
+## Quick Start
+
+### 1. Create KV Namespace
+
+Create a KV namespace via the Cloudflare dashboard or CLI:
+
+```bash
+wrangler kv:namespace create "VINEXT_CACHE"
+```
+
+This outputs a namespace ID:
+
+```
+{ binding = "VINEXT_CACHE", id = "abc123def456" }
+```
+
+### 2. Configure wrangler.jsonc
+
+Add the KV namespace to your worker config:
+
+```jsonc filename="wrangler.jsonc"
+{
+  "name": "my-app",
+  "main": "worker/index.ts",
+  "kv_namespaces": [
+    { "binding": "VINEXT_CACHE", "id": "abc123def456" }
+  ]
+}
+```
+
+### 3. Set Cache Handler in Worker
+
+```ts filename="worker/index.ts"
+import { KVCacheHandler } from 'vinext/cloudflare'
+import { setCacheHandler } from 'next/cache'
+import handler from 'vinext/server/app-router-entry'
+
+interface Env {
+  VINEXT_CACHE: KVNamespace
+}
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    setCacheHandler(new KVCacheHandler(env.VINEXT_CACHE))
+    return handler.fetch(request)
+  }
+}
+```
+
+### 4. Use ISR in Your Pages
+
+```tsx filename="app/posts/page.tsx"
+export const revalidate = 60 // Revalidate every 60 seconds
+
+export default async function Posts() {
+  const posts = await getPosts()
+  return <div>{/* Render posts */}</div>
+}
+```
+
+## API Reference
+
+### Constructor
+
+```ts
+new KVCacheHandler(kvNamespace: KVNamespace, options?: KVCacheHandlerOptions)
+```
+
+#### Parameters
+
+**`kvNamespace`** (required)  
+Type: `KVNamespace`  
+Cloudflare KV namespace binding.
+
+**`options`**  
+Type: `{ appPrefix?: string }`  
+Optional configuration.
+
+**`options.appPrefix`**  
+Type: `string`  
+Prefix for all cache keys. Useful for multi-tenant or multi-app deployments sharing one KV namespace.
+
+```ts
+const handler = new KVCacheHandler(env.VINEXT_CACHE, {
+  appPrefix: 'myapp'
+})
+```
+
+Keys are stored as `myapp:cache:key`.
+
+### Methods
+
+#### get
+
+```ts
+get(key: string, ctx?: Record<string, unknown>): Promise<CacheHandlerValue | null>
+```
+
+Fetch a cache entry. Returns `null` on miss or invalidation.
+
+**Returns:**
+
+```ts
+interface CacheHandlerValue {
+  lastModified: number
+  value: IncrementalCacheValue | null
+  cacheState?: 'stale' | 'fresh'
+}
+```
+
+- **`cacheState: 'stale'`** - Entry expired but still returned (stale-while-revalidate)
+- **`cacheState: 'fresh'`** or `undefined` - Entry is fresh
+
+#### set
+
+```ts
+set(
+  key: string,
+  data: IncrementalCacheValue | null,
+  ctx?: Record<string, unknown>
+): Promise<void>
+```
+
+Store a cache entry with optional tags and revalidation time.
+
+**Context Options:**
+
+```ts
+interface SetContext {
+  tags?: string[]
+  revalidate?: number // Seconds until stale
+}
+```
+
+**Example:**
+
+```ts
+await handler.set('/posts', data, {
+  tags: ['posts', 'homepage'],
+  revalidate: 60
+})
+```
+
+#### revalidateTag
+
+```ts
+revalidateTag(
+  tags: string | string[],
+  durations?: { expire?: number }
+): Promise<void>
+```
+
+Invalidate all entries with the specified tag(s).
+
+**Example:**
+
+```ts
+await handler.revalidateTag('posts')
+await handler.revalidateTag(['posts', 'homepage'])
+```
+
+#### resetRequestCache
+
+```ts
+resetRequestCache(): void
+```
+
+No-op. KV is stateless per request.
+
+## Cache Behavior
+
+### Stale-While-Revalidate
+
+When a cache entry expires (`revalidate` time passes):
+
+1. The stale entry is returned immediately (`cacheState: 'stale'`)
+2. Background revalidation is triggered
+3. Next request receives the fresh entry
+
+This ensures zero-latency cache hits even during revalidation.
+
+### Tag-Based Invalidation
+
+Entries can be tagged for grouped invalidation:
+
+```tsx filename="app/posts/page.tsx"
+import { unstable_cache } from 'next/cache'
+
+const getPosts = unstable_cache(
+  async () => {
+    return fetch('https://api.example.com/posts').then(r => r.json())
+  },
+  ['posts-list'],
+  { tags: ['posts'], revalidate: 60 }
+)
+
+export default async function Posts() {
+  const posts = await getPosts()
+  return <div>{/* ... */}</div>
+}
+```
+
+Invalidate from a Server Action:
+
+```ts filename="app/actions.ts"
+'use server'
+
+import { revalidateTag } from 'next/cache'
+
+export async function createPost(formData: FormData) {
+  await savePost(formData)
+  revalidateTag('posts') // Invalidate all entries tagged 'posts'
+}
+```
+
+### TTL Management
+
+KV entries have two expiry concepts:
+
+1. **Revalidate time** - When entry becomes "stale" (but still served)
+2. **KV TTL** - When entry is physically deleted from KV
+
+The KV TTL is automatically set to 10x the revalidate time (capped at 30 days) to ensure stale entries remain available during revalidation.
+
+**Example:**
+
+- `revalidate: 60` → KV TTL: 600 seconds (10 minutes)
+- `revalidate: 3600` → KV TTL: 36000 seconds (10 hours)
+- `revalidate: 86400` → KV TTL: 864000 seconds (10 days)
+
+## Entry Structure
+
+Cache entries are stored as JSON:
+
+```ts
+interface KVCacheEntry {
+  value: IncrementalCacheValue | null
+  tags: string[]
+  lastModified: number
+  revalidateAt: number | null
+}
+```
+
+- **`value`** - The cached data (page HTML, RSC payload, fetch response, etc.)
+- **`tags`** - Array of cache tags for invalidation
+- **`lastModified`** - Timestamp when entry was created
+- **`revalidateAt`** - Absolute timestamp (ms) when entry becomes stale
+
+## Key Prefixes
+
+The handler uses two key prefixes:
+
+- **`cache:`** - Cache entries (`cache:key`)
+- **`__tag:`** - Tag invalidation timestamps (`__tag:posts`)
+
+With an `appPrefix`, keys become `{appPrefix}:cache:key` and `{appPrefix}:__tag:posts`.
+
+## Tag Validation
+
+Cache tags are validated for safety:
+
+- Max length: 256 characters
+- Allowed: alphanumeric, `-`, `_`, `.`
+- Disallowed: control characters, path separators (`/`, `\`), colons (`:`)
+
+Invalid tags are silently ignored.
+
+## Supported Cache Types
+
+The KV cache handler supports all Next.js cache entry types:
+
+- **`FETCH`** - `fetch()` responses
+- **`APP_PAGE`** - App Router page renders (RSC payload + HTML)
+- **`PAGES`** - Pages Router page renders
+- **`APP_ROUTE`** - Route handler responses
+- **`REDIRECT`** - Redirect metadata
+- **`IMAGE`** - Optimized images
+
+## ArrayBuffer Serialization
+
+Some cache types contain `ArrayBuffer` fields (RSC payloads, route handler bodies, images). These are automatically:
+
+1. Converted to base64 before storage
+2. Restored to `ArrayBuffer` on retrieval
+
+Corrupted base64 is treated as a cache miss.
+
+## Multi-Tenant Deployments
+
+Use `appPrefix` to isolate cache entries per app:
+
+```ts filename="worker/index.ts"
+import { KVCacheHandler } from 'vinext/cloudflare'
+import { setCacheHandler } from 'next/cache'
+
+interface Env {
+  VINEXT_CACHE: KVNamespace
+}
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url)
+    const tenant = url.hostname.split('.')[0] // subdomain
+    
+    setCacheHandler(new KVCacheHandler(env.VINEXT_CACHE, {
+      appPrefix: tenant
+    }))
+    
+    return handler.fetch(request)
+  }
+}
+```
+
+Now `app1.example.com` and `app2.example.com` have isolated caches in the same KV namespace.
+
+## Performance Considerations
+
+### KV Consistency
+
+KV is eventually consistent. After a `set()` or `revalidateTag()`, it may take a few seconds for the change to propagate globally.
+
+For strong consistency requirements, use Durable Objects instead of KV.
+
+### Tag Lookup Parallelization
+
+Tag checks are parallelized for low latency:
+
+```ts
+const tagResults = await Promise.all(
+  tags.map(tag => kv.get(`__tag:${tag}`))
+)
+```
+
+An entry with 10 tags incurs 1 KV read (the entry) + 10 parallel KV reads (the tags) = ~11 KV reads total.
+
+### KV Limits
+
+- **Read latency:** ~10-50ms globally
+- **Write latency:** ~100ms-1s (eventual consistency)
+- **Key size limit:** 512 bytes
+- **Value size limit:** 25 MB
+- **Operations per day:** Unlimited on paid plan, 100k/day on free plan
+
+See [Cloudflare KV limits](https://developers.cloudflare.com/kv/platform/limits/).
+
+## Example: Full Worker Setup
+
+```ts filename="worker/index.ts"
+import { KVCacheHandler } from 'vinext/cloudflare'
+import { setCacheHandler } from 'next/cache'
+import { handleImageOptimization } from 'vinext/server/image-optimization'
+import handler from 'vinext/server/app-router-entry'
+
+interface Env {
+  ASSETS: Fetcher
+  IMAGES: any
+  VINEXT_CACHE: KVNamespace
+}
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    // Set cache handler before any rendering
+    setCacheHandler(new KVCacheHandler(env.VINEXT_CACHE))
+    
+    const url = new URL(request.url)
+    
+    // Image optimization
+    if (url.pathname === '/_vinext/image') {
+      return handleImageOptimization(request, {
+        fetchAsset: (path) => env.ASSETS.fetch(new Request(new URL(path, request.url))),
+        transformImage: async (body, { width, format, quality }) => {
+          const result = await env.IMAGES.input(body)
+            .transform(width > 0 ? { width } : {})
+            .output({ format, quality })
+          return result.response()
+        }
+      })
+    }
+    
+    // Delegate to vinext
+    return handler.fetch(request)
+  }
+}
+```
+
+## Related
+
+- [Route Segment Config](/api/config/route-segment) - Configure ISR per route
+- [revalidateTag/revalidatePath](/api/cache/revalidation) - Manual cache invalidation
+- [Image Optimization](/api/cloudflare/image-optimization) - Cloudflare Images integration
+- [Cloudflare Bindings](/api/cloudflare/bindings) - Access KV, D1, R2, and other bindings

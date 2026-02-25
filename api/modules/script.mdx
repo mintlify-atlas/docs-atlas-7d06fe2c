@@ -1,0 +1,475 @@
+---
+title: next/script
+description: Optimized third-party script loading with strategy control
+---
+
+The `Script` component provides optimized loading strategies for third-party scripts (analytics, ads, widgets) with control over when and how they execute.
+
+## Import
+
+```typescript
+import Script from 'next/script'
+```
+
+## Basic Usage
+
+```tsx
+import Script from 'next/script'
+
+export default function Page() {
+  return (
+    <>
+      <Script src="https://example.com/script.js" />
+      <div>Page content</div>
+    </>
+  )
+}
+```
+
+## API Reference
+
+### Props
+
+<ParamField path="src" type="string">
+  Script source URL.
+  
+  ```tsx
+  <Script src="https://www.googletagmanager.com/gtag/js?id=GA_MEASUREMENT_ID" />
+  ```
+</ParamField>
+
+<ParamField path="strategy" type="'beforeInteractive' | 'afterInteractive' | 'lazyOnload' | 'worker'" default="'afterInteractive'">
+  Loading strategy that controls when the script executes.
+  
+  - **`beforeInteractive`** — Load before page becomes interactive (SSR output)
+  - **`afterInteractive`** — Load after page becomes interactive (default)
+  - **`lazyOnload`** — Load during idle time (after `window.load`)
+  - **`worker`** — Load in a web worker (requires Partytown)
+  
+  ```tsx
+  <Script src="/critical.js" strategy="beforeInteractive" />
+  <Script src="/analytics.js" strategy="afterInteractive" />
+  <Script src="/ads.js" strategy="lazyOnload" />
+  <Script src="/heavy.js" strategy="worker" />
+  ```
+</ParamField>
+
+<ParamField path="onLoad" type="(e: Event) => void">
+  Callback invoked when the script has loaded.
+  
+  ```tsx
+  <Script
+    src="https://example.com/sdk.js"
+    onLoad={() => {
+      console.log('Script loaded')
+      window.ExampleSDK.init()
+    }}
+  />
+  ```
+</ParamField>
+
+<ParamField path="onReady" type="() => void">
+  Callback invoked when the script is ready.
+  
+  Called after `onLoad`, and also on every re-render if the script is already loaded.
+  
+  ```tsx
+  <Script
+    src="https://maps.googleapis.com/maps/api/js"
+    onReady={() => {
+      new google.maps.Map(document.getElementById('map'))
+    }}
+  />
+  ```
+</ParamField>
+
+<ParamField path="onError" type="(e: Event) => void">
+  Callback invoked when the script fails to load.
+  
+  ```tsx
+  <Script
+    src="https://example.com/script.js"
+    onError={(e) => {
+      console.error('Script failed to load', e)
+    }}
+  />
+  ```
+</ParamField>
+
+<ParamField path="id" type="string">
+  Unique identifier for the script (prevents duplicate loading).
+  
+  ```tsx
+  <Script id="google-analytics" src="https://www.googletagmanager.com/gtag/js" />
+  ```
+</ParamField>
+
+<ParamField path="children" type="string">
+  Inline script content.
+  
+  ```tsx
+  <Script id="inline-script">
+    {`console.log('Hello from inline script')`}
+  </Script>
+  ```
+</ParamField>
+
+<ParamField path="dangerouslySetInnerHTML" type="{ __html: string }">
+  Alternative to `children` for inline scripts.
+  
+  ```tsx
+  <Script
+    id="config"
+    dangerouslySetInnerHTML={{
+      __html: `window.CONFIG = ${JSON.stringify(config)}`
+    }}
+  />
+  ```
+</ParamField>
+
+### Standard Script Attributes
+
+All standard `<script>` attributes are supported:
+
+<ParamField path="type" type="string">
+  Script MIME type (e.g., `"module"`, `"text/partytown"`).
+</ParamField>
+
+<ParamField path="async" type="boolean">
+  Load script asynchronously.
+</ParamField>
+
+<ParamField path="defer" type="boolean">
+  Defer script execution.
+</ParamField>
+
+<ParamField path="crossOrigin" type="string">
+  CORS setting (`"anonymous"` or `"use-credentials"`).
+</ParamField>
+
+<ParamField path="nonce" type="string">
+  Nonce for Content Security Policy.
+</ParamField>
+
+<ParamField path="integrity" type="string">
+  Subresource Integrity hash.
+</ParamField>
+
+## Loading Strategies
+
+### beforeInteractive
+
+Load the script before the page becomes interactive. Rendered in SSR output.
+
+**Use for:**
+- Critical polyfills
+- Feature detection scripts
+- Scripts that must run before React hydration
+
+```tsx
+import Script from 'next/script'
+
+export default function RootLayout({ children }) {
+  return (
+    <html>
+      <body>
+        <Script
+          src="/polyfills.js"
+          strategy="beforeInteractive"
+        />
+        {children}
+      </body>
+    </html>
+  )
+}
+```
+
+<Warning>
+  Only works in `app/layout.tsx` or `pages/_document.tsx`. Ignored elsewhere.
+</Warning>
+
+### afterInteractive (Default)
+
+Load the script after the page becomes interactive.
+
+**Use for:**
+- Analytics scripts
+- Tag managers
+- Chat widgets
+
+```tsx
+import Script from 'next/script'
+
+export default function Page() {
+  return (
+    <>
+      <Script
+        src="https://www.googletagmanager.com/gtag/js?id=GA_MEASUREMENT_ID"
+        strategy="afterInteractive"
+      />
+      <Script id="google-analytics" strategy="afterInteractive">
+        {`
+          window.dataLayer = window.dataLayer || [];
+          function gtag(){dataLayer.push(arguments);}
+          gtag('js', new Date());
+          gtag('config', 'GA_MEASUREMENT_ID');
+        `}
+      </Script>
+      <div>Page content</div>
+    </>
+  )
+}
+```
+
+### lazyOnload
+
+Load the script during idle time (after `window.load` + `requestIdleCallback`).
+
+**Use for:**
+- Non-critical scripts
+- Ads
+- Social media widgets
+- Anything that can wait
+
+```tsx
+import Script from 'next/script'
+
+export default function Page() {
+  return (
+    <>
+      <Script
+        src="https://connect.facebook.net/en_US/sdk.js"
+        strategy="lazyOnload"
+        onLoad={() => console.log('Facebook SDK loaded')}
+      />
+      <div>Page content</div>
+    </>
+  )
+}
+```
+
+### worker (Partytown)
+
+Load the script in a web worker using Partytown.
+
+**Use for:**
+- Heavy analytics scripts
+- Anything that blocks the main thread
+
+```tsx
+import Script from 'next/script'
+
+export default function Page() {
+  return (
+    <>
+      <Script
+        src="https://www.googletagmanager.com/gtag/js?id=GA_MEASUREMENT_ID"
+        strategy="worker"
+      />
+      <div>Page content</div>
+    </>
+  )
+}
+```
+
+<Info>
+  Requires [Partytown](https://partytown.builder.io/) setup. Sets `type="text/partytown"` on the script tag.
+</Info>
+
+## Examples
+
+### Google Analytics
+
+```tsx
+import Script from 'next/script'
+
+export default function RootLayout({ children }) {
+  return (
+    <html>
+      <body>
+        <Script
+          src={`https://www.googletagmanager.com/gtag/js?id=${process.env.NEXT_PUBLIC_GA_ID}`}
+          strategy="afterInteractive"
+        />
+        <Script id="google-analytics" strategy="afterInteractive">
+          {`
+            window.dataLayer = window.dataLayer || [];
+            function gtag(){dataLayer.push(arguments);}
+            gtag('js', new Date());
+            gtag('config', '${process.env.NEXT_PUBLIC_GA_ID}');
+          `}
+        </Script>
+        {children}
+      </body>
+    </html>
+  )
+}
+```
+
+### Facebook Pixel
+
+```tsx
+import Script from 'next/script'
+
+export default function Page() {
+  return (
+    <>
+      <Script id="facebook-pixel" strategy="afterInteractive">
+        {`
+          !function(f,b,e,v,n,t,s)
+          {if(f.fbq)return;n=f.fbq=function(){n.callMethod?
+          n.callMethod.apply(n,arguments):n.queue.push(arguments)};
+          if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';
+          n.queue=[];t=b.createElement(e);t.async=!0;
+          t.src=v;s=b.getElementsByTagName(e)[0];
+          s.parentNode.insertBefore(t,s)}(window, document,'script',
+          'https://connect.facebook.net/en_US/fbevents.js');
+          fbq('init', '${process.env.NEXT_PUBLIC_FB_PIXEL_ID}');
+          fbq('track', 'PageView');
+        `}
+      </Script>
+      <noscript>
+        <img
+          height="1"
+          width="1"
+          style={{ display: 'none' }}
+          src={`https://www.facebook.com/tr?id=${process.env.NEXT_PUBLIC_FB_PIXEL_ID}&ev=PageView&noscript=1`}
+        />
+      </noscript>
+      <div>Page content</div>
+    </>
+  )
+}
+```
+
+### External SDK
+
+```tsx
+import Script from 'next/script'
+import { useState } from 'react'
+
+export default function Page() {
+  const [sdkReady, setSdkReady] = useState(false)
+  
+  return (
+    <>
+      <Script
+        src="https://sdk.example.com/v1/sdk.js"
+        strategy="afterInteractive"
+        onLoad={() => {
+          window.ExampleSDK.init({ apiKey: process.env.NEXT_PUBLIC_API_KEY })
+          setSdkReady(true)
+        }}
+        onError={() => {
+          console.error('Failed to load Example SDK')
+        }}
+      />
+      
+      {sdkReady ? (
+        <button onClick={() => window.ExampleSDK.doSomething()}>
+          Use SDK
+        </button>
+      ) : (
+        <div>Loading SDK...</div>
+      )}
+    </>
+  )
+}
+```
+
+### Inline Configuration
+
+```tsx
+import Script from 'next/script'
+
+export default function Page() {
+  const config = {
+    apiUrl: process.env.NEXT_PUBLIC_API_URL,
+    features: ['feature1', 'feature2'],
+  }
+  
+  return (
+    <>
+      <Script
+        id="app-config"
+        strategy="beforeInteractive"
+        dangerouslySetInnerHTML={{
+          __html: `window.APP_CONFIG = ${JSON.stringify(config)}`
+        }}
+      />
+      <div>Page content</div>
+    </>
+  )
+}
+```
+
+## Deduplication
+
+Scripts with the same `id` or `src` are only loaded once:
+
+```tsx
+// Both components render the same script — only loaded once
+function ComponentA() {
+  return <Script id="analytics" src="/analytics.js" />
+}
+
+function ComponentB() {
+  return <Script id="analytics" src="/analytics.js" />
+}
+```
+
+## SSR Behavior
+
+- **`beforeInteractive`**: Rendered in SSR HTML output
+- **`afterInteractive`**: Not rendered (injected client-side)
+- **`lazyOnload`**: Not rendered (injected client-side)
+- **`worker`**: Not rendered (injected client-side)
+
+## Performance
+
+### Impact on Core Web Vitals
+
+| Strategy | FCP | LCP | CLS | TBT |
+|----------|-----|-----|-----|-----|
+| `beforeInteractive` | 🟡 | 🟡 | ✅ | 🟡 |
+| `afterInteractive` | ✅ | ✅ | ✅ | 🟡 |
+| `lazyOnload` | ✅ | ✅ | ✅ | ✅ |
+| `worker` | ✅ | ✅ | ✅ | ✅ |
+
+### Best Practices
+
+1. **Use `lazyOnload` for non-critical scripts**
+2. **Minimize `beforeInteractive` usage** (blocks hydration)
+3. **Use `worker` for heavy analytics** (requires Partytown)
+4. **Always provide `id` for inline scripts** (enables deduplication)
+5. **Avoid blocking the main thread**
+
+## Limitations
+
+<Warning>
+  **`beforeInteractive` placement**: Only works in `app/layout.tsx` or `pages/_document.tsx`. Silently ignored in page components.
+</Warning>
+
+<Warning>
+  **No SSR execution**: Inline scripts do not execute during SSR. Use them for browser-only code.
+</Warning>
+
+<Warning>
+  **CSP nonces**: If using CSP, pass `nonce` to all inline scripts.
+</Warning>
+
+## Migration from HTML script tag
+
+| HTML | Next.js Script |
+|------|----------------|
+| `<script src="...">` | `<Script src="..." />` |
+| `<script async src="...">` | `<Script src="..." strategy="afterInteractive" />` |
+| `<script defer src="...">` | `<Script src="..." strategy="afterInteractive" />` |
+| `<script>...</script>` (in head) | `<Script id="..." strategy="beforeInteractive">...</Script>` |
+| `<script>...</script>` (in body) | `<Script id="...">...</Script>` |
+
+## Source
+
+[View source code →](https://github.com/stackblitz/vinext/blob/main/packages/vinext/src/shims/script.tsx)
+
+Implementation: `/home/daytona/workspace/source/packages/vinext/src/shims/script.tsx`

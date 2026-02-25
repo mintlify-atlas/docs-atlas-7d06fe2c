@@ -1,122 +1,137 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "vinext",
+  "theme": "aspen",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#F48120",
+    "light": "#FBAD41",
+    "dark": "#D96B20"
   },
-  "favicon": "/favicon.svg",
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/cloudflare/vinext"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/cloudflare/vinext"
+    }
+  },
   "navigation": {
     "tabs": [
       {
-        "tab": "Guides",
+        "tab": "Documentation",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Get Started",
             "pages": [
-              "index",
+              "introduction",
               "quickstart",
-              "development"
+              "installation"
             ]
           },
           {
-            "group": "Customization",
+            "group": "Core Concepts",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
+              "concepts/architecture",
+              "concepts/routing",
+              "concepts/server-components",
+              "concepts/caching"
             ]
           },
           {
-            "group": "Writing content",
+            "group": "Guides",
             "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
-            ]
-          },
-          {
-            "group": "AI tools",
-            "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
+              "guides/migration",
+              "guides/deployment",
+              "guides/cloudflare-workers",
+              "guides/configuration",
+              "guides/static-export"
             ]
           }
         ]
       },
       {
-        "tab": "API reference",
+        "tab": "API Reference",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "CLI",
             "pages": [
-              "api-reference/introduction"
+              "api/cli/overview",
+              "api/cli/dev",
+              "api/cli/build",
+              "api/cli/start",
+              "api/cli/deploy",
+              "api/cli/init",
+              "api/cli/check"
             ]
           },
           {
-            "group": "Endpoint examples",
+            "group": "Module Shims",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "api/modules/overview",
+              "api/modules/link",
+              "api/modules/image",
+              "api/modules/navigation",
+              "api/modules/router",
+              "api/modules/server",
+              "api/modules/headers",
+              "api/modules/cache",
+              "api/modules/dynamic",
+              "api/modules/script",
+              "api/modules/font"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "api/config/next-config",
+              "api/config/vite-config",
+              "api/config/route-segment"
+            ]
+          },
+          {
+            "group": "Cloudflare",
+            "pages": [
+              "api/cloudflare/kv-cache-handler",
+              "api/cloudflare/image-optimization",
+              "api/cloudflare/bindings"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Advanced",
+        "groups": [
+          {
+            "group": "Internals",
+            "pages": [
+              "advanced/architecture-deep-dive",
+              "advanced/rsc-integration",
+              "advanced/build-pipeline",
+              "advanced/virtual-modules"
+            ]
+          },
+          {
+            "group": "Compatibility",
+            "pages": [
+              "advanced/api-coverage",
+              "advanced/known-limitations",
+              "advanced/ecosystem-libraries"
+            ]
+          },
+          {
+            "group": "Contributing",
+            "pages": [
+              "contributing/overview",
+              "contributing/development-setup",
+              "contributing/testing",
+              "contributing/adding-features"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
+    ]
   }
 }

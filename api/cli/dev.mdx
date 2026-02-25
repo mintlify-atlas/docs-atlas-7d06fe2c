@@ -1,0 +1,359 @@
+---
+title: vinext dev
+description: Start the development server with Vite and hot module replacement
+---
+
+Starts a local development server with Vite's fast HMR (Hot Module Replacement).
+
+## Usage
+
+```bash
+vinext dev [options]
+```
+
+## Options
+
+<ParamField path="--port" type="number" default="3000">
+  Port to listen on. Can also use the short form `-p`.
+  
+  ```bash
+  vinext dev --port 4000
+  vinext dev -p 4000
+  ```
+</ParamField>
+
+<ParamField path="--hostname" type="string" default="localhost">
+  Hostname to bind to. Can also use the short form `-H`.
+  
+  ```bash
+  vinext dev --hostname 0.0.0.0
+  vinext dev -H 0.0.0.0
+  ```
+  
+  Use `0.0.0.0` to expose the server on your local network.
+</ParamField>
+
+<ParamField path="--turbopack" type="flag">
+  Accepted for compatibility with Next.js. No-op (Vite is always used).
+  
+  ```bash
+  vinext dev --turbopack
+  ```
+</ParamField>
+
+<ParamField path="--help" type="flag">
+  Show help for this command. Can also use `-h`.
+  
+  ```bash
+  vinext dev --help
+  ```
+</ParamField>
+
+## Behavior
+
+### Router Detection
+
+vinext automatically detects your router type:
+
+- **App Router**: Detects `app/` or `src/app/` directory
+- **Pages Router**: Detects `pages/` or `src/pages/` directory (when no `app/` exists)
+
+The dev server behavior differs based on router:
+
+<CodeGroup>
+```typescript App Router
+// Uses @vitejs/plugin-rsc for React Server Components
+// Hot reloads Server Components without full refresh
+// Client Components use Vite's standard HMR
+
+export default function Page() {
+  // This component hot reloads on save
+  return <div>Hello from RSC</div>
+}
+```
+
+```typescript Pages Router
+// Standard Vite dev server with SSR
+// Full page reload on changes
+
+export default function Page() {
+  return <div>Hello from Pages Router</div>
+}
+```
+</CodeGroup>
+
+### Vite Integration
+
+vinext runs Vite's dev server under the hood with these features:
+
+- **Fast cold start**: No bundling required, uses native ESM
+- **Instant HMR**: Changes reflect immediately without full reload
+- **Optimized dependencies**: Pre-bundles dependencies with esbuild
+- **Module deduplication**: Prevents "Invalid hook call" errors by deduplicating React packages
+
+### Configuration Loading
+
+The dev server loads configuration in this order:
+
+1. **User's `vite.config.ts`**: If present, uses your custom config
+2. **Auto-configuration**: If no config file exists, vinext generates one automatically:
+   - Registers `vinext()` plugin
+   - Auto-detects and registers `@vitejs/plugin-rsc` for App Router
+   - Sets up React deduplication
+
+### Module Resolution
+
+vinext dynamically resolves Vite from your project's `node_modules`, not from vinext's installation directory. This prevents dual Vite instances when using `npm link` or `bun link` for local development.
+
+```typescript
+// From cli.ts:48-66
+async function loadVite(): Promise<ViteModule> {
+  if (_viteModule) return _viteModule;
+
+  const projectRoot = process.cwd();
+  let vitePath: string;
+
+  try {
+    // Resolve "vite" from the project root, not from vinext's location
+    const require = createRequire(path.join(projectRoot, "package.json"));
+    vitePath = require.resolve("vite");
+  } catch {
+    // Fallback: use the Vite that ships with vinext
+    vitePath = "vite";
+  }
+
+  const vite = await import(vitePath);
+  _viteModule = vite;
+  return vite;
+}
+```
+
+## Examples
+
+### Basic Usage
+
+Start dev server on default port (3000):
+
+```bash
+vinext dev
+```
+
+Output:
+```
+vinext dev  (Vite 6.0.0)
+
+  ➜  Local:   http://localhost:3000/
+  ➜  Network: use --hostname 0.0.0.0 to expose
+```
+
+### Custom Port
+
+Start dev server on port 4000:
+
+```bash
+vinext dev --port 4000
+```
+
+Or using the short form:
+
+```bash
+vinext dev -p 4000
+```
+
+### Expose on Local Network
+
+Make the dev server accessible from other devices on your network:
+
+```bash
+vinext dev --hostname 0.0.0.0
+```
+
+Output:
+```
+vinext dev  (Vite 6.0.0)
+
+  ➜  Local:   http://localhost:3000/
+  ➜  Network: http://192.168.1.100:3000/
+```
+
+### Custom Port and Hostname
+
+Combine options:
+
+```bash
+vinext dev --port 8080 --hostname 0.0.0.0
+```
+
+Short form:
+
+```bash
+vinext dev -p 8080 -H 0.0.0.0
+```
+
+### Using with npm Scripts
+
+Add to your `package.json`:
+
+```json
+{
+  "scripts": {
+    "dev": "vinext dev",
+    "dev:custom": "vinext dev --port 4000"
+  }
+}
+```
+
+Then run:
+
+```bash
+npm run dev
+npm run dev:custom
+```
+
+## Configuration File
+
+### Automatic Configuration (Recommended)
+
+If you don't have a `vite.config.ts`, vinext auto-configures everything:
+
+```bash
+vinext dev
+# No vite.config.ts needed — vinext handles it
+```
+
+### Custom Configuration
+
+Create a `vite.config.ts` for custom setups:
+
+```typescript
+import { defineConfig } from 'vite'
+import vinext from 'vinext'
+
+export default defineConfig({
+  plugins: [vinext()],
+  server: {
+    port: 3000,
+    host: 'localhost',
+    // Add custom Vite server config here
+  },
+})
+```
+
+<Warning>
+If you have a `vite.config.ts`, vinext uses it instead of auto-configuration. Make sure to include the `vinext()` plugin.
+</Warning>
+
+## Development Features
+
+### Hot Module Replacement (HMR)
+
+vinext provides instant HMR for:
+
+- **Client Components**: Full React Fast Refresh support
+- **Server Components** (App Router): Selective updates without full page reload
+- **Styles**: CSS/SCSS changes apply instantly
+- **Static assets**: Image/font changes reflect immediately
+
+### TypeScript
+
+vinext fully supports TypeScript with no additional configuration:
+
+```typescript
+import type { Metadata } from 'next'
+
+export const metadata: Metadata = {
+  title: 'My Page',
+}
+
+export default function Page() {
+  return <div>TypeScript works out of the box</div>
+}
+```
+
+### Environment Variables
+
+Access environment variables in your code:
+
+```typescript
+// Client-side (must be prefixed with NEXT_PUBLIC_)
+const apiUrl = process.env.NEXT_PUBLIC_API_URL
+
+// Server-side (any variable)
+const secret = process.env.API_SECRET
+```
+
+Load from `.env.local`:
+
+```bash
+NEXT_PUBLIC_API_URL=https://api.example.com
+API_SECRET=secret123
+```
+
+## Troubleshooting
+
+### Port Already in Use
+
+If port 3000 is already in use:
+
+```bash
+vinext dev --port 3001
+```
+
+Or stop the process using port 3000:
+
+```bash
+# Find process using port 3000
+lsof -ti:3000
+
+# Kill the process
+kill -9 $(lsof -ti:3000)
+```
+
+### Module Not Found Errors
+
+If you see "Module not found" errors, ensure dependencies are installed:
+
+```bash
+npm install
+```
+
+For App Router projects, ensure `@vitejs/plugin-rsc` is installed:
+
+```bash
+npm install -D @vitejs/plugin-rsc
+```
+
+### Invalid Hook Call Error
+
+This usually indicates duplicate React instances. vinext automatically deduplicates React, but if you still see this error:
+
+1. Clear node_modules and reinstall:
+   ```bash
+   rm -rf node_modules package-lock.json
+   npm install
+   ```
+
+2. If using `npm link`, ensure you're resolving React from the project:
+   ```bash
+   cd your-project
+   npm link react react-dom
+   ```
+
+## Performance
+
+vinext dev server is significantly faster than Next.js:
+
+- **Cold start**: 2-3x faster (no bundling required)
+- **HMR**: 10-50x faster (native ESM vs webpack HMR)
+- **Memory usage**: Lower (no webpack compilation overhead)
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="build Command" icon="hammer" href="/api/cli/build">
+    Build your app for production
+  </Card>
+  <Card title="Configuration" icon="gear" href="/guides/configuration">
+    Configure vinext with vite.config.ts
+  </Card>
+</CardGroup>

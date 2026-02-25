@@ -1,0 +1,503 @@
+---
+title: next/server
+description: Server-side request and response utilities for middleware and route handlers
+---
+
+The `next/server` module provides Web-standard request/response wrappers and middleware utilities that work across runtimes (Node.js, Cloudflare Workers, Deno).
+
+## Import
+
+```typescript
+import {
+  NextRequest,
+  NextResponse,
+  NextURL,
+  NextFetchEvent,
+  userAgent,
+  after,
+  connection,
+} from 'next/server'
+
+import type {
+  NextMiddleware,
+  NextMiddlewareResult,
+  UserAgent,
+} from 'next/server'
+```
+
+## NextRequest
+
+Extends the standard `Request` with Next.js-specific conveniences.
+
+```typescript
+export class NextRequest extends Request {
+  nextUrl: NextURL
+  cookies: RequestCookies
+  ip?: string
+  geo?: GeoData
+}
+```
+
+### Constructor
+
+```typescript
+const req = new NextRequest(input, init?)
+```
+
+<ParamField path="input" type="URL | RequestInfo" required>
+  URL string, URL object, or Request object.
+</ParamField>
+
+<ParamField path="init" type="RequestInit">
+  Standard Request options (method, headers, body, etc.).
+</ParamField>
+
+### Properties
+
+<ResponseField name="nextUrl" type="NextURL">
+  Enhanced URL object with pathname helpers.
+  
+  ```typescript
+  req.nextUrl.pathname  // "/api/users"
+  req.nextUrl.searchParams.get('id')
+  ```
+</ResponseField>
+
+<ResponseField name="cookies" type="RequestCookies">
+  Read-only cookie accessor.
+  
+  ```typescript
+  const session = req.cookies.get('session')
+  // { name: 'session', value: 'abc123' }
+  
+  const all = req.cookies.getAll()
+  // [{ name: 'session', value: 'abc123' }, ...]
+  
+  req.cookies.has('theme')  // boolean
+  ```
+</ResponseField>
+
+<ResponseField name="ip" type="string | undefined">
+  Client IP address (from trusted headers).
+  
+  Priority:
+  1. `CF-Connecting-IP` (Cloudflare)
+  2. `X-Real-IP`
+  3. `X-Forwarded-For` (first entry)
+  
+  ```typescript
+  console.log('Request from IP:', req.ip)
+  ```
+</ResponseField>
+
+<ResponseField name="geo" type="GeoData | undefined">
+  Geolocation data (platform-dependent).
+  
+  ```typescript
+  if (req.geo) {
+    console.log(`Request from ${req.geo.city}, ${req.geo.country}`)
+  }
+  ```
+  
+  **Available fields:**
+  - `country?: string` — ISO country code
+  - `city?: string`
+  - `region?: string` — State/province
+  - `latitude?: string`
+  - `longitude?: string`
+</ResponseField>
+
+### Usage Example
+
+```typescript
+import { NextRequest, NextResponse } from 'next/server'
+
+export function middleware(req: NextRequest) {
+  const sessionCookie = req.cookies.get('session')
+  
+  if (!sessionCookie) {
+    return NextResponse.redirect(new URL('/login', req.url))
+  }
+  
+  // Check geolocation
+  if (req.geo?.country === 'US') {
+    return NextResponse.rewrite(new URL('/us-version', req.url))
+  }
+  
+  return NextResponse.next()
+}
+```
+
+## NextResponse
+
+Extends the standard `Response` with Next.js middleware helpers.
+
+```typescript
+export class NextResponse extends Response {
+  cookies: ResponseCookies
+  
+  static json<T>(body: T, init?: ResponseInit): NextResponse<T>
+  static redirect(url: string | URL, status?: number): NextResponse
+  static rewrite(destination: string | URL, init?): NextResponse
+  static next(init?): NextResponse
+}
+```
+
+### Constructor
+
+```typescript
+const res = new NextResponse(body?, init?)
+```
+
+### Static Methods
+
+<ResponseField name="json" type="<T>(body: T, init?: ResponseInit) => NextResponse<T>">
+  Create a JSON response.
+  
+  ```typescript
+  return NextResponse.json(
+    { message: 'Success' },
+    { status: 200 }
+  )
+  ```
+</ResponseField>
+
+<ResponseField name="redirect" type="(url: string | URL, status?: number) => NextResponse">
+  Create a redirect response.
+  
+  ```typescript
+  // 307 Temporary Redirect (default)
+  return NextResponse.redirect('https://example.com')
+  
+  // 301 Permanent Redirect
+  return NextResponse.redirect('https://example.com', 301)
+  
+  // 308 Permanent Redirect (preserves method)
+  return NextResponse.redirect('https://example.com', 308)
+  ```
+</ResponseField>
+
+<ResponseField name="rewrite" type="(destination: string | URL, init?) => NextResponse">
+  Rewrite to a different URL (proxy pattern).
+  
+  ```typescript
+  // Serve /api/v2/users but show /api/users in the browser
+  return NextResponse.rewrite(new URL('/api/v2/users', req.url))
+  ```
+  
+  The client sees the original URL; the server fetches from the destination.
+</ResponseField>
+
+<ResponseField name="next" type="(init?: MiddlewareResponseInit) => NextResponse">
+  Continue to the next handler.
+  
+  ```typescript
+  // Pass through unchanged
+  return NextResponse.next()
+  
+  // Pass through with modified headers
+  return NextResponse.next({
+    headers: {
+      'x-custom-header': 'value'
+    }
+  })
+  
+  // Modify request headers for downstream handlers
+  return NextResponse.next({
+    request: {
+      headers: new Headers({
+        'x-user-id': '123'
+      })
+    }
+  })
+  ```
+</ResponseField>
+
+### Properties
+
+<ResponseField name="cookies" type="ResponseCookies">
+  Cookie setter for responses.
+  
+  ```typescript
+  const res = NextResponse.json({ ok: true })
+  
+  res.cookies.set('session', 'abc123', {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'lax',
+    maxAge: 60 * 60 * 24 * 7  // 1 week
+  })
+  
+  res.cookies.delete('old-cookie')
+  
+  return res
+  ```
+  
+  **Methods:**
+  - `set(name, value, options?)` — Set a cookie
+  - `delete(name)` — Delete a cookie (sets Max-Age=0)
+  - `get(name)` — Read a cookie (from Set-Cookie headers)
+  - `getAll()` — Read all cookies
+</ResponseField>
+
+### Usage Examples
+
+```typescript
+// Route handler: /app/api/users/route.ts
+import { NextRequest, NextResponse } from 'next/server'
+
+export async function GET(req: NextRequest) {
+  const users = await getUsers()
+  
+  return NextResponse.json(users, {
+    headers: {
+      'Cache-Control': 'max-age=60'
+    }
+  })
+}
+
+export async function POST(req: NextRequest) {
+  const body = await req.json()
+  const user = await createUser(body)
+  
+  const res = NextResponse.json(user, { status: 201 })
+  res.cookies.set('user-id', user.id, { httpOnly: true })
+  
+  return res
+}
+```
+
+```typescript
+// Middleware: /middleware.ts
+import { NextRequest, NextResponse } from 'next/server'
+
+export function middleware(req: NextRequest) {
+  // Add custom header
+  const res = NextResponse.next()
+  res.headers.set('x-pathname', req.nextUrl.pathname)
+  return res
+}
+```
+
+## NextURL
+
+Lightweight URL wrapper with pathname helpers.
+
+```typescript
+const url = new NextURL('/api/users?page=1', 'https://example.com')
+
+console.log(url.pathname)        // "/api/users"
+console.log(url.searchParams.get('page'))  // "1"
+console.log(url.href)            // "https://example.com/api/users?page=1"
+
+// Modify
+url.pathname = '/api/v2/users'
+url.searchParams.set('page', '2')
+```
+
+### Properties
+
+<ResponseField name="href" type="string">
+  Full URL string.
+</ResponseField>
+
+<ResponseField name="origin" type="string">
+  Protocol + hostname + port (e.g., `https://example.com:3000`).
+</ResponseField>
+
+<ResponseField name="pathname" type="string">
+  URL path (e.g., `/api/users`).
+</ResponseField>
+
+<ResponseField name="search" type="string">
+  Query string with `?` prefix (e.g., `?page=1`).
+</ResponseField>
+
+<ResponseField name="searchParams" type="URLSearchParams">
+  URLSearchParams instance for reading/writing query params.
+</ResponseField>
+
+<ResponseField name="hash" type="string">
+  Hash fragment with `#` prefix (e.g., `#section-2`).
+</ResponseField>
+
+### Methods
+
+<ResponseField name="clone" type="() => NextURL">
+  Create a copy of the URL.
+  
+  ```typescript
+  const newUrl = url.clone()
+  newUrl.pathname = '/different-path'
+  ```
+</ResponseField>
+
+<ResponseField name="toString" type="() => string">
+  Convert to string (same as `.href`).
+</ResponseField>
+
+## NextFetchEvent
+
+Middleware event object (provides `waitUntil` for background work).
+
+```typescript
+export function middleware(req: NextRequest, event: NextFetchEvent) {
+  // Schedule background work
+  event.waitUntil(
+    logRequest(req).catch(console.error)
+  )
+  
+  return NextResponse.next()
+}
+```
+
+<ResponseField name="waitUntil" type="(promise: Promise<any>) => void">
+  Register a promise to keep the runtime alive after the response is sent.
+  
+  Useful for:
+  - Logging
+  - Analytics
+  - Cache warming
+  
+  ```typescript
+  event.waitUntil(
+    fetch('https://analytics.example.com/log', {
+      method: 'POST',
+      body: JSON.stringify({ path: req.nextUrl.pathname })
+    })
+  )
+  ```
+</ResponseField>
+
+## Utility Functions
+
+### userAgent
+
+Parse User-Agent header.
+
+```typescript
+import { userAgent } from 'next/server'
+
+export function middleware(req: NextRequest) {
+  const { isBot, browser, device, os } = userAgent(req)
+  
+  if (isBot) {
+    return NextResponse.rewrite(new URL('/bot-version', req.url))
+  }
+  
+  console.log('Browser:', browser.name, browser.version)
+  console.log('Device:', device.type, device.vendor)
+  console.log('OS:', os.name, os.version)
+  
+  return NextResponse.next()
+}
+```
+
+<ResponseField name="isBot" type="boolean">
+  Whether the user agent is a known bot/crawler.
+</ResponseField>
+
+<ResponseField name="browser" type="{ name?: string; version?: string; major?: string }">
+  Browser information.
+</ResponseField>
+
+<ResponseField name="device" type="{ model?: string; type?: string; vendor?: string }">
+  Device information.
+</ResponseField>
+
+<ResponseField name="os" type="{ name?: string; version?: string }">
+  Operating system information.
+</ResponseField>
+
+<Warning>
+  vinext's UA parser is minimal. For production use, install `ua-parser-js` or similar.
+</Warning>
+
+### after
+
+Schedule work after the response is sent (Next.js 15+).
+
+```typescript
+import { after } from 'next/server'
+
+export async function GET() {
+  // Send response immediately
+  const res = NextResponse.json({ ok: true })
+  
+  // Log after response is sent
+  after(async () => {
+    await logAnalytics()
+  })
+  
+  return res
+}
+```
+
+<Warning>
+  In vinext, `after()` runs as a microtask (best-effort). For guaranteed background execution, use `waitUntil` in middleware.
+</Warning>
+
+### connection
+
+Signal that the response requires a live connection (opt out of ISR).
+
+```typescript
+import { connection } from 'next/server'
+
+export async function GET() {
+  connection()  // Mark as dynamic
+  
+  const data = await getRealTimeData()
+  return NextResponse.json(data)
+}
+```
+
+Sets `Cache-Control: no-store` and bypasses ISR caching.
+
+## Cookie Options
+
+```typescript
+interface CookieOptions {
+  path?: string         // Cookie path (default: "/")
+  domain?: string       // Cookie domain
+  maxAge?: number       // Max age in seconds
+  expires?: Date        // Expiration date
+  httpOnly?: boolean    // HttpOnly flag (default: false)
+  secure?: boolean      // Secure flag (default: false in dev, true in prod)
+  sameSite?: 'Strict' | 'Lax' | 'None'  // SameSite attribute
+}
+```
+
+## Middleware Type
+
+```typescript
+export type NextMiddleware = (
+  request: NextRequest,
+  event: NextFetchEvent,
+) => NextMiddlewareResult | Promise<NextMiddlewareResult>
+
+export type NextMiddlewareResult =
+  | NextResponse
+  | Response
+  | null
+  | undefined
+  | void
+```
+
+Returning `null`, `undefined`, or `void` is equivalent to `NextResponse.next()`.
+
+## Runtime Compatibility
+
+All APIs use Web-standard primitives and work across:
+
+- **Node.js** (18+)
+- **Cloudflare Workers**
+- **Deno**
+- **Vercel Edge Runtime**
+- Any WinterCG-compatible runtime
+
+## Source
+
+[View source code →](https://github.com/stackblitz/vinext/blob/main/packages/vinext/src/shims/server.ts)
+
+Implementation: `/home/daytona/workspace/source/packages/vinext/src/shims/server.ts`

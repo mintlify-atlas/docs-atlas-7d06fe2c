@@ -1,0 +1,465 @@
+---
+title: next/navigation
+description: App Router navigation hooks and utilities
+---
+
+The `next/navigation` module provides hooks and utilities for App Router navigation, including pathname/query access, programmatic navigation, and server-side redirects.
+
+## Import
+
+```typescript
+import {
+  useRouter,
+  usePathname,
+  useSearchParams,
+  useParams,
+  useSelectedLayoutSegment,
+  useSelectedLayoutSegments,
+  redirect,
+  permanentRedirect,
+  notFound,
+  forbidden,
+  unauthorized,
+  RedirectType,
+} from 'next/navigation'
+```
+
+## Client Hooks
+
+### useRouter
+
+Returns a router instance for programmatic navigation.
+
+```tsx
+'use client'
+import { useRouter } from 'next/navigation'
+
+export default function Page() {
+  const router = useRouter()
+  
+  return (
+    <button onClick={() => router.push('/dashboard')}>
+      Go to Dashboard
+    </button>
+  )
+}
+```
+
+#### Router Methods
+
+<ResponseField name="push" type="(href: string, options?: { scroll?: boolean }) => void">
+  Navigate to a new URL (pushes history entry).
+  
+  ```tsx
+  router.push('/about')
+  router.push('/blog?filter=tech', { scroll: false })
+  ```
+</ResponseField>
+
+<ResponseField name="replace" type="(href: string, options?: { scroll?: boolean }) => void">
+  Navigate to a new URL (replaces history entry).
+  
+  ```tsx
+  router.replace('/login')
+  ```
+</ResponseField>
+
+<ResponseField name="back" type="() => void">
+  Navigate to the previous page.
+  
+  ```tsx
+  <button onClick={() => router.back()}>Back</button>
+  ```
+</ResponseField>
+
+<ResponseField name="forward" type="() => void">
+  Navigate to the next page (if available).
+  
+  ```tsx
+  <button onClick={() => router.forward()}>Forward</button>
+  ```
+</ResponseField>
+
+<ResponseField name="refresh" type="() => void">
+  Re-fetch the current page's RSC stream (soft refresh).
+  
+  ```tsx
+  // After a mutation
+  router.refresh()
+  ```
+</ResponseField>
+
+<ResponseField name="prefetch" type="(href: string) => void">
+  Manually prefetch a route.
+  
+  ```tsx
+  <div onMouseEnter={() => router.prefetch('/dashboard')}>
+    Hover to prefetch
+  </div>
+  ```
+</ResponseField>
+
+### usePathname
+
+Returns the current pathname (without basePath).
+
+```tsx
+'use client'
+import { usePathname } from 'next/navigation'
+
+export default function Nav() {
+  const pathname = usePathname()
+  
+  return (
+    <nav>
+      <a href="/" className={pathname === '/' ? 'active' : ''}>
+        Home
+      </a>
+      <a href="/about" className={pathname === '/about' ? 'active' : ''}>
+        About
+      </a>
+    </nav>
+  )
+}
+```
+
+<ResponseField name="pathname" type="string">
+  Current pathname, e.g., `/blog/post-1`
+  
+  - Excludes basePath (if configured)
+  - Excludes query string and hash
+  - Updates on navigation
+</ResponseField>
+
+### useSearchParams
+
+Returns a `URLSearchParams` instance for reading query parameters.
+
+```tsx
+'use client'
+import { useSearchParams } from 'next/navigation'
+
+export default function SearchResults() {
+  const searchParams = useSearchParams()
+  const query = searchParams.get('q')
+  const page = searchParams.get('page') || '1'
+  
+  return <div>Search results for: {query} (page {page})</div>
+}
+```
+
+<ResponseField name="searchParams" type="ReadonlyURLSearchParams">
+  URLSearchParams instance with methods:
+  - `get(key: string): string | null`
+  - `getAll(key: string): string[]`
+  - `has(key: string): boolean`
+  - `entries(): Iterator<[string, string]>`
+</ResponseField>
+
+### useParams
+
+Returns dynamic route parameters.
+
+```tsx
+'use client'
+// File: app/blog/[slug]/page.tsx
+import { useParams } from 'next/navigation'
+
+export default function BlogPost() {
+  const params = useParams<{ slug: string }>()
+  
+  return <h1>Post: {params.slug}</h1>
+}
+```
+
+<ResponseField name="params" type="Record<string, string | string[]>">
+  Dynamic route parameters, e.g., `{ slug: 'hello-world' }`
+  
+  - Single segment: `{ slug: 'post-1' }`
+  - Catch-all: `{ slug: ['2024', '01', 'post'] }`
+</ResponseField>
+
+### useSelectedLayoutSegment
+
+Returns the active child segment one level below the current layout.
+
+```tsx
+'use client'
+// File: app/blog/layout.tsx
+import { useSelectedLayoutSegment } from 'next/navigation'
+
+export default function BlogLayout({ children }) {
+  const segment = useSelectedLayoutSegment()
+  
+  return (
+    <div>
+      <div>Active segment: {segment}</div>
+      {children}
+    </div>
+  )
+}
+```
+
+<ResponseField name="segment" type="string | null">
+  - `/blog` → `null` (no child)
+  - `/blog/post-1` → `'post-1'`
+  - `/blog/category/tech` → `'category'`
+</ResponseField>
+
+### useSelectedLayoutSegments
+
+Returns all active segments below the current layout.
+
+```tsx
+'use client'
+import { useSelectedLayoutSegments } from 'next/navigation'
+
+export default function Layout({ children }) {
+  const segments = useSelectedLayoutSegments()
+  
+  return (
+    <div>
+      <div>Path: /{segments.join('/')}</div>
+      {children}
+    </div>
+  )
+}
+```
+
+<ResponseField name="segments" type="string[]">
+  - `/blog` → `[]`
+  - `/blog/post-1` → `['post-1']`
+  - `/blog/category/tech` → `['category', 'tech']`
+</ResponseField>
+
+### useServerInsertedHTML
+
+Inject HTML during SSR from client components (CSS-in-JS libraries).
+
+```tsx
+'use client'
+import { useServerInsertedHTML } from 'next/navigation'
+import { StyleSheetManager } from 'styled-components'
+
+export default function StyledComponentsRegistry({ children }) {
+  const [sheet] = useState(() => new ServerStyleSheet())
+  
+  useServerInsertedHTML(() => {
+    const styles = sheet.getStyleElement()
+    sheet.instance.clearTag()
+    return <>{styles}</>
+  })
+  
+  return (
+    <StyleSheetManager sheet={sheet.instance}>
+      {children}
+    </StyleSheetManager>
+  )
+}
+```
+
+## Server Functions
+
+### redirect
+
+Throw a redirect response (caught by the framework).
+
+```tsx
+import { redirect } from 'next/navigation'
+
+export default async function Page() {
+  const session = await getSession()
+  
+  if (!session) {
+    redirect('/login')
+  }
+  
+  return <Dashboard />
+}
+```
+
+<ParamField path="url" type="string" required>
+  Destination URL (relative or absolute).
+</ParamField>
+
+<ParamField path="type" type="'push' | 'replace' | RedirectType" default="'replace'">
+  Navigation type:
+  - `'replace'` — 307 redirect (default)
+  - `'push'` — 307 redirect with history push
+  - `RedirectType.push` / `RedirectType.replace`
+</ParamField>
+
+### permanentRedirect
+
+Throw a permanent redirect (308).
+
+```tsx
+import { permanentRedirect } from 'next/navigation'
+
+export default async function Page() {
+  permanentRedirect('https://example.com')
+}
+```
+
+<ParamField path="url" type="string" required>
+  Destination URL.
+</ParamField>
+
+### notFound
+
+Throw a 404 Not Found error.
+
+```tsx
+import { notFound } from 'next/navigation'
+
+export default async function Page({ params }) {
+  const post = await getPost(params.id)
+  
+  if (!post) {
+    notFound()
+  }
+  
+  return <Post data={post} />
+}
+```
+
+Renders the nearest `not-found.tsx` file.
+
+### forbidden
+
+Throw a 403 Forbidden error (Next.js 16+).
+
+```tsx
+import { forbidden } from 'next/navigation'
+
+export default async function AdminPage() {
+  const user = await getUser()
+  
+  if (!user.isAdmin) {
+    forbidden()
+  }
+  
+  return <AdminPanel />
+}
+```
+
+Renders the nearest `forbidden.tsx` file (or error.tsx as fallback).
+
+### unauthorized
+
+Throw a 401 Unauthorized error (Next.js 16+).
+
+```tsx
+import { unauthorized } from 'next/navigation'
+
+export default async function ProfilePage() {
+  const session = await getSession()
+  
+  if (!session) {
+    unauthorized()
+  }
+  
+  return <Profile user={session.user} />
+}
+```
+
+Renders the nearest `unauthorized.tsx` file (or error.tsx as fallback).
+
+## Shallow Routing
+
+Update the URL without re-fetching data:
+
+```tsx
+'use client'
+import { useRouter, usePathname, useSearchParams } from 'next/navigation'
+
+export default function Filters() {
+  const router = useRouter()
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
+  
+  function setFilter(filter: string) {
+    const params = new URLSearchParams(searchParams)
+    params.set('filter', filter)
+    router.push(pathname + '?' + params.toString())
+  }
+  
+  return (
+    <button onClick={() => setFilter('tech')}>
+      Tech Posts
+    </button>
+  )
+}
+```
+
+Next.js 15+ automatically intercepts `history.pushState()` / `replaceState()` calls, so direct manipulation works:
+
+```tsx
+// Also works
+window.history.pushState(null, '', '?filter=tech')
+```
+
+## Prefetching
+
+### Automatic (Link)
+
+`<Link>` components automatically prefetch on viewport entry (250px margin).
+
+### Manual (useRouter)
+
+```tsx
+function Card({ href }) {
+  const router = useRouter()
+  
+  return (
+    <div onMouseEnter={() => router.prefetch(href)}>
+      <a href={href}>Read more</a>
+    </div>
+  )
+}
+```
+
+### Cache TTL
+
+Prefetched entries are valid for 30 seconds. Stale entries are re-prefetched on next trigger.
+
+## basePath Support
+
+All navigation functions automatically handle `basePath`:
+
+```javascript
+// next.config.js
+module.exports = { basePath: '/docs' }
+```
+
+```tsx
+router.push('/api')  // Navigates to /docs/api
+usePathname()        // Returns /api (without basePath)
+```
+
+## i18n Support
+
+Use the `locale` parameter for internationalized routing:
+
+```tsx
+import Link from 'next/link'
+
+<Link href="/" locale="fr">Français</Link>
+<Link href="/" locale={false}>Default Locale</Link>
+```
+
+## Limitations
+
+<Warning>
+  **SSR hook usage**: Client hooks (`useRouter`, `usePathname`, etc.) cannot be called during SSR of client components. Use them inside `useEffect` or event handlers.
+</Warning>
+
+<Warning>
+  **Concurrent navigation**: Multiple rapid `router.push()` calls may result in race conditions. Await navigation if order matters.
+</Warning>
+
+## Source
+
+[View source code →](https://github.com/stackblitz/vinext/blob/main/packages/vinext/src/shims/navigation.ts)
+
+Implementation: `/home/daytona/workspace/source/packages/vinext/src/shims/navigation.ts`

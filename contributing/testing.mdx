@@ -1,0 +1,117 @@
+---
+title: Testing Guide
+description: How to run and write tests for vinext
+---
+
+vinext has a comprehensive test suite covering unit tests, integration tests, and end-to-end browser tests.
+
+## Running Tests
+
+```bash
+pnpm test             # Vitest unit + integration tests
+pnpm run test:e2e     # Playwright E2E tests (5 projects)
+pnpm run typecheck    # TypeScript checking (tsgo)
+pnpm run lint         # Linting (oxlint)
+```
+
+## Test Structure
+
+### Unit and Integration Tests
+
+Unit and integration tests are written using [Vitest](https://vitest.dev/) and live in the `tests/` directory.
+
+```
+tests/
+  *.test.ts             # Vitest unit + integration tests
+  nextjs-compat/        # Tests ported from Next.js test suite
+  fixtures/             # Test apps (pages-basic, app-basic, ecosystem libs)
+```
+
+Unit tests go in `tests/*.test.ts`. When adding new functionality, always add corresponding test cases.
+
+### E2E Tests
+
+Browser-level tests are written using [Playwright](https://playwright.dev/) and live in the `tests/e2e/` directory.
+
+```bash
+pnpm run test:e2e     # Playwright E2E tests (5 projects)
+```
+
+E2E tests cover:
+- Pages Router (dev + production)
+- App Router (dev)
+- Both routers on Cloudflare Workers via `wrangler dev`
+
+Browser-level tests go in `tests/e2e/`. These are essential for catching subtle browser issues that unit tests miss — rendered output, client-side navigation, hydration behavior, etc.
+
+## Test Fixtures
+
+Test fixtures are minimal Next.js applications used for integration testing:
+
+- `tests/fixtures/pages-basic/` — Pages Router test app
+- `tests/fixtures/app-basic/` — App Router test app
+- `examples/app-router-cloudflare/` — App Router on Workers
+- `examples/pages-router-cloudflare/` — Pages Router on Workers
+
+<Note>
+Add new test pages to fixtures, not to examples. Examples are for user-facing demos.
+</Note>
+
+## Integration Tests
+
+The [Vercel App Router Playground](https://github.com/vercel/next-app-router-playground) runs on vinext as an integration test. See it live at [app-router-playground.vinext.workers.dev](https://app-router-playground.vinext.workers.dev).
+
+## Test Coverage
+
+The test suite includes:
+
+- **1,700+ Vitest tests** covering unit and integration scenarios
+- **380+ Playwright E2E tests** covering browser behavior
+- Tests ported directly from the [Next.js test suite](https://github.com/vercel/next.js/tree/canary/test)
+- Tests from [OpenNext's Cloudflare conformance suite](https://github.com/opennextjs/opennextjs-cloudflare)
+
+Test coverage includes:
+- Routing (file-system routing, dynamic routes, catch-all, route groups)
+- SSR and RSC rendering
+- Server actions
+- Caching (ISR, `"use cache"`, fetch cache)
+- Metadata generation
+- Middleware execution
+- Streaming SSR
+- Client-side navigation and hydration
+
+See `tests/nextjs-compat/TRACKING.md` for detailed compatibility tracking.
+
+## Debugging Tests
+
+For browser-level debugging, we recommend [agent-browser](https://github.com/vercel-labs/agent-browser). It's effective at verifying:
+- Rendered output
+- Client-side navigation
+- Hydration behavior
+- Interactive component behavior
+
+Unit tests miss a lot of subtle browser issues. agent-browser has been effective at catching them throughout this project.
+
+## Writing Tests
+
+When adding new functionality:
+
+1. **Add tests first** — put test cases in the appropriate `tests/*.test.ts` file
+2. **Add fixture pages if needed** — create test pages in `tests/fixtures/` for integration testing
+3. **Run the full test suite** before committing — ensure all tests pass
+4. **Add E2E tests for UI behavior** — if the feature affects browser behavior, add Playwright tests
+
+## Smoke Tests
+
+`scripts/smoke-test.sh` is a lightweight post-deploy check that curls every deployed example and verifies HTTP 200 + expected content. It runs automatically in CI after the deploy job completes.
+
+```bash
+./scripts/smoke-test.sh                    # check production URLs
+./scripts/smoke-test.sh --preview pr-42    # check PR preview URLs
+```
+
+When adding a new example, always add a corresponding smoke test entry. The format is:
+```
+"worker-name  /path  expected-text"
+```
+where `expected-text` is a case-insensitive string that must appear in the response body.

@@ -1,0 +1,577 @@
+---
+title: next/font
+description: Automatic font optimization for Google Fonts and local fonts
+---
+
+The `next/font` module provides automatic font optimization with zero layout shift, reduced network requests, and built-in subsetting.
+
+## Google Fonts
+
+Import fonts from Google Fonts CDN (dev) or self-host them (production).
+
+### Import
+
+```typescript
+import { Inter, Roboto_Mono } from 'next/font/google'
+```
+
+### Basic Usage
+
+```tsx
+import { Inter } from 'next/font/google'
+
+const inter = Inter({ subsets: ['latin'] })
+
+export default function Layout({ children }) {
+  return (
+    <html className={inter.className}>
+      <body>{children}</body>
+    </html>
+  )
+}
+```
+
+### API Reference
+
+<ParamField path="subsets" type="string[]" required>
+  Font subsets to load (reduces file size).
+  
+  Common subsets:
+  - `'latin'` — Latin alphabet (English, French, German, etc.)
+  - `'latin-ext'` — Extended Latin (Eastern European)
+  - `'cyrillic'` — Cyrillic alphabet (Russian, Ukrainian, etc.)
+  - `'greek'` — Greek alphabet
+  - `'vietnamese'` — Vietnamese
+  
+  ```tsx
+  const inter = Inter({ 
+    subsets: ['latin', 'latin-ext'] 
+  })
+  ```
+</ParamField>
+
+<ParamField path="weight" type="string | string[]">
+  Font weights to load.
+  
+  ```tsx
+  // Single weight
+  const inter = Inter({ subsets: ['latin'], weight: '400' })
+  
+  // Multiple weights
+  const inter = Inter({ subsets: ['latin'], weight: ['400', '700'] })
+  
+  // Variable font (all weights)
+  const inter = Inter({ subsets: ['latin'] })  // Loads 100-900
+  ```
+</ParamField>
+
+<ParamField path="style" type="string | string[]" default="'normal'">
+  Font styles to load.
+  
+  ```tsx
+  const inter = Inter({ subsets: ['latin'], style: ['normal', 'italic'] })
+  ```
+</ParamField>
+
+<ParamField path="display" type="string" default="'swap'">
+  CSS `font-display` value.
+  
+  - `'swap'` — Show fallback immediately, swap when loaded (recommended)
+  - `'optional'` — Use font if cached, otherwise use fallback
+  - `'fallback'` — Brief block period, then swap
+  - `'block'` — Block rendering until font loads (avoid)
+  
+  ```tsx
+  const inter = Inter({ subsets: ['latin'], display: 'optional' })
+  ```
+</ParamField>
+
+<ParamField path="preload" type="boolean" default="true">
+  Add `<link rel="preload">` for faster loading.
+  
+  ```tsx
+  const inter = Inter({ subsets: ['latin'], preload: true })
+  ```
+</ParamField>
+
+<ParamField path="fallback" type="string[]" default="['sans-serif']">
+  Fallback fonts when the web font is loading or unavailable.
+  
+  ```tsx
+  const inter = Inter({ 
+    subsets: ['latin'],
+    fallback: ['system-ui', 'arial', 'sans-serif']
+  })
+  ```
+</ParamField>
+
+<ParamField path="adjustFontFallback" type="boolean" default="true">
+  Automatically adjust fallback fonts to reduce layout shift.
+  
+  ```tsx
+  const inter = Inter({ subsets: ['latin'], adjustFontFallback: false })
+  ```
+</ParamField>
+
+<ParamField path="variable" type="string">
+  CSS variable name for the font.
+  
+  ```tsx
+  const inter = Inter({ 
+    subsets: ['latin'],
+    variable: '--font-inter'
+  })
+  
+  // Usage in CSS:
+  // font-family: var(--font-inter);
+  ```
+</ParamField>
+
+### Return Value
+
+<ResponseField name="className" type="string">
+  CSS class name that applies the font.
+  
+  ```tsx
+  const inter = Inter({ subsets: ['latin'] })
+  
+  <div className={inter.className}>
+    This text uses Inter
+  </div>
+  ```
+</ResponseField>
+
+<ResponseField name="style" type="{ fontFamily: string }">
+  Inline style object with `fontFamily`.
+  
+  ```tsx
+  <div style={inter.style}>
+    This text uses Inter
+  </div>
+  ```
+</ResponseField>
+
+<ResponseField name="variable" type="string">
+  CSS class name that sets the CSS variable.
+  
+  ```tsx
+  const inter = Inter({ subsets: ['latin'], variable: '--font-inter' })
+  
+  <html className={inter.variable}>
+    {/* Now var(--font-inter) is available everywhere */}
+  </html>
+  ```
+</ResponseField>
+
+### Examples
+
+#### Multiple Fonts
+
+```tsx
+import { Inter, Roboto_Mono } from 'next/font/google'
+
+const inter = Inter({ subsets: ['latin'] })
+const robotoMono = Roboto_Mono({ subsets: ['latin'] })
+
+export default function Layout({ children }) {
+  return (
+    <html className={`${inter.variable} ${robotoMono.variable}`}>
+      <body className={inter.className}>{children}</body>
+    </html>
+  )
+}
+```
+
+#### With Tailwind CSS
+
+```tsx
+// app/layout.tsx
+import { Inter } from 'next/font/google'
+
+const inter = Inter({ 
+  subsets: ['latin'],
+  variable: '--font-inter'
+})
+
+export default function RootLayout({ children }) {
+  return (
+    <html className={inter.variable}>
+      <body>{children}</body>
+    </html>
+  )
+}
+```
+
+```javascript
+// tailwind.config.js
+module.exports = {
+  theme: {
+    extend: {
+      fontFamily: {
+        sans: ['var(--font-inter)', 'sans-serif'],
+      },
+    },
+  },
+}
+```
+
+#### Single Page
+
+```tsx
+import { Playfair_Display } from 'next/font/google'
+
+const playfair = Playfair_Display({ subsets: ['latin'] })
+
+export default function ArticlePage() {
+  return (
+    <article className={playfair.className}>
+      <h1>Beautiful Typography</h1>
+      <p>Using Playfair Display</p>
+    </article>
+  )
+}
+```
+
+## Local Fonts
+
+Use fonts from local files.
+
+### Import
+
+```typescript
+import localFont from 'next/font/local'
+```
+
+### Basic Usage
+
+```tsx
+import localFont from 'next/font/local'
+
+const myFont = localFont({
+  src: './fonts/my-font.woff2'
+})
+
+export default function Layout({ children }) {
+  return (
+    <html className={myFont.className}>
+      <body>{children}</body>
+    </html>
+  )
+}
+```
+
+### API Reference
+
+<ParamField path="src" type="string | LocalFontSrc | LocalFontSrc[]" required>
+  Font file path(s).
+  
+  **Single file:**
+  ```tsx
+  const myFont = localFont({
+    src: './fonts/my-font.woff2'
+  })
+  ```
+  
+  **Multiple weights:**
+  ```tsx
+  const myFont = localFont({
+    src: [
+      {
+        path: './fonts/my-font-regular.woff2',
+        weight: '400',
+        style: 'normal',
+      },
+      {
+        path: './fonts/my-font-bold.woff2',
+        weight: '700',
+        style: 'normal',
+      },
+    ]
+  })
+  ```
+</ParamField>
+
+<ParamField path="weight" type="string">
+  Default font weight (when using single `src` string).
+  
+  ```tsx
+  const myFont = localFont({
+    src: './fonts/my-font.woff2',
+    weight: '600'
+  })
+  ```
+</ParamField>
+
+<ParamField path="style" type="string" default="'normal'">
+  Default font style.
+  
+  ```tsx
+  const myFont = localFont({
+    src: './fonts/my-font-italic.woff2',
+    style: 'italic'
+  })
+  ```
+</ParamField>
+
+<ParamField path="display" type="string" default="'swap'">
+  CSS `font-display` value (same as Google Fonts).
+</ParamField>
+
+<ParamField path="fallback" type="string[]">
+  Fallback fonts.
+  
+  ```tsx
+  const myFont = localFont({
+    src: './fonts/my-font.woff2',
+    fallback: ['system-ui', 'sans-serif']
+  })
+  ```
+</ParamField>
+
+<ParamField path="variable" type="string">
+  CSS variable name.
+  
+  ```tsx
+  const myFont = localFont({
+    src: './fonts/my-font.woff2',
+    variable: '--font-custom'
+  })
+  ```
+</ParamField>
+
+<ParamField path="preload" type="boolean" default="true">
+  Add preload hint.
+</ParamField>
+
+<ParamField path="declarations" type="Array<{ prop: string; value: string }>">
+  Custom CSS properties for the `@font-face` rule.
+  
+  ```tsx
+  const myFont = localFont({
+    src: './fonts/my-font.woff2',
+    declarations: [
+      { prop: 'font-feature-settings', value: '"liga" 1' },
+      { prop: 'font-variation-settings', value: '"wght" 400' }
+    ]
+  })
+  ```
+</ParamField>
+
+### Examples
+
+#### Variable Font
+
+```tsx
+import localFont from 'next/font/local'
+
+const myFont = localFont({
+  src: './fonts/my-variable-font.woff2',
+  variable: '--font-custom'
+})
+
+export default function Layout({ children }) {
+  return (
+    <html className={myFont.variable}>
+      <body className={myFont.className}>{children}</body>
+    </html>
+  )
+}
+```
+
+#### Multiple Weights and Styles
+
+```tsx
+import localFont from 'next/font/local'
+
+const myFont = localFont({
+  src: [
+    {
+      path: './fonts/my-font-light.woff2',
+      weight: '300',
+      style: 'normal',
+    },
+    {
+      path: './fonts/my-font-regular.woff2',
+      weight: '400',
+      style: 'normal',
+    },
+    {
+      path: './fonts/my-font-regular-italic.woff2',
+      weight: '400',
+      style: 'italic',
+    },
+    {
+      path: './fonts/my-font-bold.woff2',
+      weight: '700',
+      style: 'normal',
+    },
+  ]
+})
+
+export default function Layout({ children }) {
+  return (
+    <html className={myFont.className}>
+      <body>{children}</body>
+    </html>
+  )
+}
+```
+
+## Self-Hosting Google Fonts
+
+In production builds, vinext automatically downloads and self-hosts Google Fonts:
+
+1. **Build time**: Plugin fetches font CSS and `.woff2` files from Google
+2. **Assets**: Fonts are bundled with your app
+3. **Runtime**: No requests to Google Fonts CDN
+
+**Benefits:**
+- Faster loading (no DNS lookup, no third-party request)
+- Better privacy (no data sent to Google)
+- Works offline
+
+**Dev mode**: Fonts load from Google CDN (faster iteration).
+
+## Performance
+
+### Zero Layout Shift
+
+vine automatically generates fallback font metrics to prevent layout shift:
+
+```css
+/* Generated by vinext */
+@font-face {
+  font-family: '__Inter_Fallback';
+  src: local('Arial');
+  ascent-override: 90.2%;
+  descent-override: 22.4%;
+  line-gap-override: 0%;
+  size-adjust: 107.4%;
+}
+```
+
+### Subsetting
+
+Loading only the characters you need:
+
+```tsx
+const inter = Inter({ 
+  subsets: ['latin'],  // Only Latin characters
+})
+
+// File size: ~30KB instead of ~120KB (all subsets)
+```
+
+### Preloading
+
+Preload hints ensure fonts load early:
+
+```html
+<link rel="preload" href="/fonts/inter.woff2" as="font" type="font/woff2" crossorigin />
+```
+
+## CSS Variables
+
+Use CSS variables for flexible theming:
+
+```tsx
+// app/layout.tsx
+import { Inter, Roboto_Mono } from 'next/font/google'
+
+const inter = Inter({ subsets: ['latin'], variable: '--font-sans' })
+const robotoMono = Roboto_Mono({ subsets: ['latin'], variable: '--font-mono' })
+
+export default function RootLayout({ children }) {
+  return (
+    <html className={`${inter.variable} ${robotoMono.variable}`}>
+      <body>{children}</body>
+    </html>
+  )
+}
+```
+
+```css
+/* globals.css */
+body {
+  font-family: var(--font-sans), sans-serif;
+}
+
+code {
+  font-family: var(--font-mono), monospace;
+}
+```
+
+## Common Fonts
+
+vinext provides named exports for popular Google Fonts:
+
+```typescript
+import {
+  Inter,
+  Roboto,
+  Roboto_Mono,
+  Open_Sans,
+  Lato,
+  Poppins,
+  Montserrat,
+  Source_Code_Pro,
+  Noto_Sans,
+  Raleway,
+  Ubuntu,
+  Nunito,
+  Playfair_Display,
+  Merriweather,
+  PT_Sans,
+  Fira_Code,
+  JetBrains_Mono,
+  Geist,
+  Geist_Mono,
+} from 'next/font/google'
+```
+
+For other fonts, use the dynamic accessor:
+
+```typescript
+import googleFonts from 'next/font/google'
+
+const dmSans = googleFonts.DM_Sans({ subsets: ['latin'] })
+```
+
+## Limitations
+
+<Warning>
+  **Module-level only**: Font loaders must be called at module level (not inside components).
+</Warning>
+
+```tsx
+// ✅ Correct
+const inter = Inter({ subsets: ['latin'] })
+
+export default function Page() {
+  return <div className={inter.className}>Text</div>
+}
+
+// ❌ Wrong
+export default function Page() {
+  const inter = Inter({ subsets: ['latin'] })
+  return <div className={inter.className}>Text</div>
+}
+```
+
+<Warning>
+  **Local font paths**: Must be relative to the file where `localFont` is called.
+</Warning>
+
+<Warning>
+  **Build-time download**: Google Fonts are fetched at build time. Network issues during build will cause failures.
+</Warning>
+
+## Source
+
+[View Google Fonts source →](https://github.com/stackblitz/vinext/blob/main/packages/vinext/src/shims/font-google.ts)
+
+[View local fonts source →](https://github.com/stackblitz/vinext/blob/main/packages/vinext/src/shims/font-local.ts)
+
+Implementation:
+- `/home/daytona/workspace/source/packages/vinext/src/shims/font-google.ts`
+- `/home/daytona/workspace/source/packages/vinext/src/shims/font-local.ts`

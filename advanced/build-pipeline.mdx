@@ -1,0 +1,540 @@
+---
+title: Build Pipeline
+description: Production build pipeline, optimization strategies, and deployment
+---
+
+# Build Pipeline
+
+Vinext's build pipeline transforms your Next.js application into production-ready bundles for deployment. This guide covers the build process, optimization strategies, and deployment preparation.
+
+## Build Orchestration
+
+### Using createBuilder
+
+<Warning>
+You **must** use `createBuilder()` + `builder.buildApp()` for production builds, not `build()` directly.
+</Warning>
+
+Calling `build()` from the Vite JS API doesn't trigger the RSC plugin's multi-environment build pipeline.
+
+From the CLI (`packages/vinext/src/cli.ts`):
+
+```typescript
+import { createBuilder } from "@vitejs/plugin-rsc";
+
+const builder = createBuilder({
+  root: process.cwd(),
+  configFile: resolvedConfig,
+});
+
+await builder.buildApp();
+```
+
+### Build Sequence
+
+The `buildApp()` method runs a 5-step build pipeline:
+
+1. **RSC environment build**
+   - Bundles server components
+   - Applies `react-server` import condition
+   - Generates RSC runtime modules
+
+2. **SSR environment build**
+   - Bundles SSR runtime
+   - Applies `node` import condition
+   - Links to RSC chunks
+
+3. **Client environment build**
+   - Bundles browser code
+   - Code-splits by route and shared dependencies
+   - Applies `browser` import condition
+
+4. **Manifest generation**
+   - Maps source modules to output chunks
+   - Used for preload hints and modulepreload
+
+5. **Asset optimization**
+   - CSS extraction and minification
+   - Image asset copying
+   - Compression (gzip/brotli)
+
+## Code Splitting Strategy
+
+### Manual Chunks
+
+Vinext uses a conservative code-splitting strategy optimized for real-world performance:
+
+From `packages/vinext/src/index.ts`:
+
+```typescript
+function clientManualChunks(id: string): string | undefined {
+  // React framework — always loaded, shared across all pages.
+  // Isolating React into its own chunk is the single highest-value
+  // split: it's ~130KB compressed, loaded on every page, and its
+  // content hash rarely changes between deploys.
+  if (id.includes("node_modules")) {
+    const pkg = getPackageName(id);
+    if (!pkg) return undefined;
+    if (
+      pkg === "react" ||
+      pkg === "react-dom" ||
+      pkg === "scheduler"
+    ) {
+      return "framework";
+    }
+    // Let Rollup handle all other vendor code via its default
+    // graph-based splitting. This produces a reasonable number of
+    // shared chunks (typically 5-15) based on actual import patterns,
+    // with good compression efficiency.
+    return undefined;
+  }
+
+  // Vinext shims — small runtime, shared across all pages.
+  if (id.startsWith(shimsDir)) {
+    return "vinext";
+  }
+
+  return undefined;
+}
+```
+
+### Output Configuration
+
+```typescript
+const clientOutputConfig = {
+  manualChunks: clientManualChunks,
+  experimentalMinChunkSize: 10_000,
+};
+```
+
+**`experimentalMinChunkSize`** merges tiny shared chunks (< 10KB) back into their importers:
+- Reduces HTTP request count
+- Improves gzip compression efficiency (small files restart the compression dictionary)
+- Adds ~5-15% wire overhead for many small files vs fewer larger chunks
+
+### Why Not Per-Package Splitting?
+
+Many bundlers split every npm package into its own chunk. Vinext deliberately doesn't:
+
+**Problems with per-package splitting:**
+- Creates 50-200+ chunks for typical apps (exceeds HTTP/2 sweet spot of ~25 requests)
+- gzip/brotli compress small files poorly (each file restarts with empty dictionary)
+- ES module evaluation has per-module overhead that compounds on mobile
+- No major Vite framework (Remix, SvelteKit, Astro, TanStack) uses per-package splitting
+- Next.js only isolates packages > 160KB
+
+**Rollup's graph-based splitting handles this well:**
+- Shared dependencies between routes get their own chunks automatically
+- Route-specific code stays in route chunks
+- Results in 5-15 vendor chunks based on actual usage patterns
+
+## Treeshaking
+
+### Aggressive Vendor Treeshaking
+
+Vinext uses aggressive treeshaking to eliminate unused exports from vendor packages:
+
+```typescript
+const clientTreeshakeConfig = {
+  preset: "recommended" as const,
+  moduleSideEffects: "no-external" as const,
+};
+```
+
+**`moduleSideEffects: "no-external"`** means:
+- **Local project modules**: preserve side effects (CSS imports, polyfills)
+- **node_modules packages**: treat as side-effect-free unless exports are used
+
+This is the **single highest-impact optimization** for large barrel-exporting libraries:
+
+**Example: mermaid**
+Without this setting, importing one diagram type includes all 15+ diagram renderers (~400KB). With `"no-external"`, only the used renderer is included (~50KB).
+
+**Example: @mui/material**
+Importing `Button` from the barrel doesn't pull in the entire library (80+ components). Only `Button` and its dependencies are included.
+
+### Why Not the "smallest" Preset?
+
+Vite's `"smallest"` preset also sets:
+- `propertyReadSideEffects: false` - Can break libraries that rely on property access side effects
+- `tryCatchDeoptimization: false` - Can break feature detection patterns
+
+`"recommended" + "no-external"` gives most of the benefit with less risk.
+
+## Lazy Chunk Detection
+
+Vinext computes which chunks are lazy-loaded (behind `React.lazy()`, `next/dynamic`, or manual `import()`) and excludes them from preload hints:
+
+```typescript
+function computeLazyChunks(
+  buildManifest: Record<string, ManifestChunk>
+): string[] {
+  // Collect all chunk files statically reachable from entries
+  const eagerFiles = new Set<string>();
+  const visited = new Set<string>();
+  const queue: string[] = [];
+
+  // Start BFS from all entry chunks
+  for (const key of Object.keys(buildManifest)) {
+    const chunk = buildManifest[key];
+    if (chunk.isEntry) {
+      queue.push(key);
+    }
+  }
+
+  while (queue.length > 0) {
+    const key = queue.shift()!;
+    if (visited.has(key)) continue;
+    visited.add(key);
+
+    const chunk = buildManifest[key];
+    if (!chunk) continue;
+
+    eagerFiles.add(chunk.file);
+
+    // Mark CSS as eager (avoid FOUC)
+    if (chunk.css) {
+      for (const cssFile of chunk.css) {
+        eagerFiles.add(cssFile);
+      }
+    }
+
+    // Follow only static imports — NOT dynamicImports
+    if (chunk.imports) {
+      for (const imp of chunk.imports) {
+        if (!visited.has(imp)) {
+          queue.push(imp);
+        }
+      }
+    }
+  }
+
+  // Any JS file NOT in eagerFiles is a lazy chunk
+  const lazyChunks: string[] = [];
+  for (const key of Object.keys(buildManifest)) {
+    const chunk = buildManifest[key];
+    if (chunk.file && !eagerFiles.has(chunk.file) && chunk.file.endsWith(".js")) {
+      lazyChunks.push(chunk.file);
+    }
+  }
+
+  return lazyChunks;
+}
+```
+
+Lazy chunks are stored in `__VINEXT_LAZY_CHUNKS__` and excluded from `<link rel="modulepreload">` and `<script type="module">` tags. They're fetched on demand when the dynamic import executes.
+
+## Static Export
+
+The `output: 'export'` option renders all pages to static HTML at build time:
+
+From `packages/vinext/src/build/static-export.ts`:
+
+```typescript
+export async function staticExportPages(
+  options: StaticExportOptions,
+): Promise<StaticExportResult> {
+  const { server, routes, apiRoutes, pagesDir, outDir, config } = options;
+  const result: StaticExportResult = {
+    pageCount: 0,
+    files: [],
+    warnings: [],
+    errors: [],
+  };
+
+  // Warn about API routes (not supported)
+  if (apiRoutes.length > 0) {
+    result.warnings.push(
+      `${apiRoutes.length} API route(s) skipped — not supported with output: 'export'`
+    );
+  }
+
+  // Gather all pages to render
+  const pagesToRender: Array<{
+    route: Route;
+    urlPath: string;
+    params: Record<string, string | string[]>;
+  }> = [];
+
+  for (const route of routes) {
+    const pageModule = await server.ssrLoadModule(route.filePath);
+
+    // Validate: getServerSideProps not allowed
+    if (typeof pageModule.getServerSideProps === "function") {
+      result.errors.push({
+        route: route.pattern,
+        error: `Page uses getServerSideProps which is not supported with output: 'export'`,
+      });
+      continue;
+    }
+
+    if (route.isDynamic) {
+      // Dynamic route — must have getStaticPaths
+      if (typeof pageModule.getStaticPaths !== "function") {
+        result.errors.push({
+          route: route.pattern,
+          error: `Dynamic route requires getStaticPaths with output: 'export'`,
+        });
+        continue;
+      }
+
+      const pathsResult = await pageModule.getStaticPaths({ locales: [], defaultLocale: "" });
+      const fallback = pathsResult?.fallback ?? false;
+
+      if (fallback !== false) {
+        result.errors.push({
+          route: route.pattern,
+          error: `getStaticPaths must return fallback: false with output: 'export'`,
+        });
+        continue;
+      }
+
+      const paths = pathsResult?.paths ?? [];
+      for (const { params } of paths) {
+        const urlPath = buildUrlFromParams(route.pattern, params);
+        pagesToRender.push({ route, urlPath, params });
+      }
+    } else {
+      // Static route
+      pagesToRender.push({ route, urlPath: route.pattern, params: {} });
+    }
+  }
+
+  // Render each page
+  for (const { route, urlPath, params } of pagesToRender) {
+    const html = await renderStaticPage({
+      server,
+      route,
+      urlPath,
+      params,
+      pagesDir,
+      config,
+      AppComponent,
+      DocumentComponent,
+      headShim,
+      dynamicShim,
+      routerShim,
+    });
+
+    const outputPath = urlPath === "/" 
+      ? "index.html" 
+      : urlPath.slice(1) + "/index.html";
+    const fullPath = path.join(outDir, outputPath);
+    
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+    fs.writeFileSync(fullPath, html);
+    
+    result.files.push(outputPath);
+    result.pageCount++;
+  }
+
+  return result;
+}
+```
+
+### Static Export Constraints
+
+**Pages Router:**
+- ✅ Static pages
+- ✅ `getStaticProps` pages
+- ✅ Dynamic routes with `getStaticPaths` (must be `fallback: false`)
+- ❌ `getServerSideProps` (build error)
+- ❌ API routes (skipped with warning)
+
+**App Router:**
+- ✅ Static pages
+- ✅ Dynamic routes with `generateStaticParams()`
+- ❌ Dynamic routes without `generateStaticParams()` (build error)
+- ❌ Route handlers (skipped with warning)
+
+## Cloudflare Workers Build
+
+For Cloudflare Workers deployment, Vinext applies additional transformations:
+
+### Embedded Manifests
+
+The SSR manifest and lazy chunk list are embedded as globals:
+
+```typescript
+plugins.push({
+  name: "vinext:cloudflare-build",
+  apply: "build",
+  config() {
+    return {
+      build: {
+        rollupOptions: {
+          output: {
+            // Embed client manifest in SSR bundle
+            banner: `
+globalThis.__VINEXT_SSR_MANIFEST__ = ${JSON.stringify(ssrManifest)};
+globalThis.__VINEXT_LAZY_CHUNKS__ = ${JSON.stringify(lazyChunks)};
+globalThis.__VINEXT_CLIENT_ENTRY__ = ${JSON.stringify(clientEntry)};
+            `,
+          },
+        },
+      },
+    };
+  },
+});
+```
+
+This eliminates the need to read `manifest.json` at runtime (Cloudflare Workers has no file system).
+
+### Native Module Stubbing
+
+Native Node.js modules (sharp, resvg, satori) are auto-stubbed for Workers:
+
+```typescript
+const NATIVE_MODULES = [
+  "sharp",
+  "@resvg/resvg-js",
+  "@napi-rs/canvas",
+  "lightningcss",
+];
+
+for (const mod of NATIVE_MODULES) {
+  config.resolve.alias[mod] = "vinext/stubs/native-module";
+}
+```
+
+The stub throws a descriptive error if the module is accessed at runtime:
+
+```typescript
+// vinext/stubs/native-module.ts
+export default new Proxy({}, {
+  get(target, prop) {
+    throw new Error(
+      `Native module accessed at runtime. This module requires Node.js ` +
+      `native bindings and cannot run on Cloudflare Workers. ` +
+      `To fix: either avoid using this module or implement a pure-JS alternative.`
+    );
+  },
+});
+```
+
+## Production Optimizations
+
+### Compression
+
+Vinext applies compression to static assets:
+
+```typescript
+import compression from "compression";
+
+const handler = compression()(baseHandler);
+```
+
+Cloudflare Workers automatically applies Brotli compression to responses, so no additional configuration is needed.
+
+### Cache Headers
+
+Vinext sets cache headers based on content type:
+
+**Hashed assets** (JS/CSS with content hash in filename):
+```
+Cache-Control: public, max-age=31536000, immutable
+```
+
+**HTML pages**:
+```
+Cache-Control: public, max-age=0, must-revalidate
+```
+
+**ISR pages**:
+```
+Cache-Control: s-maxage=60, stale-while-revalidate
+X-Vinext-Cache: HIT | MISS | STALE
+```
+
+### Asset Collection
+
+The Pages Router SSR entry collects assets for each page:
+
+```typescript
+function collectAssetTags(manifest, moduleIds) {
+  const m = manifest || globalThis.__VINEXT_SSR_MANIFEST__ || null;
+  const tags = [];
+  const seen = new Set();
+  const lazySet = globalThis.__VINEXT_LAZY_CHUNKS__ 
+    ? new Set(globalThis.__VINEXT_LAZY_CHUNKS__) 
+    : null;
+
+  // Inject client entry script
+  if (globalThis.__VINEXT_CLIENT_ENTRY__) {
+    const entry = globalThis.__VINEXT_CLIENT_ENTRY__;
+    seen.add(entry);
+    tags.push(`<link rel="modulepreload" href="/${entry}" />`);
+    tags.push(`<script type="module" src="/${entry}" crossorigin></script>`);
+  }
+
+  if (m) {
+    const allFiles = [];
+
+    // Collect assets for page modules
+    for (const id of moduleIds || []) {
+      let files = m[id];
+      if (!files) {
+        // Try suffix match
+        for (const mk in m) {
+          if (id.endsWith("/" + mk) || id === mk) {
+            files = m[mk];
+            break;
+          }
+        }
+      }
+      if (files) {
+        allFiles.push(...files);
+      }
+    }
+
+    // Also inject shared chunks (framework, vinext runtime)
+    for (const key in m) {
+      const vals = m[key];
+      for (const file of vals || []) {
+        const basename = file.split("/").pop() || "";
+        if (
+          basename.startsWith("framework-") ||
+          basename.startsWith("vinext-") ||
+          basename.includes("vinext-client-entry")
+        ) {
+          allFiles.push(file);
+        }
+      }
+    }
+
+    for (const file of allFiles) {
+      const normalized = file.charAt(0) === "/" ? file.slice(1) : file;
+      if (seen.has(normalized)) continue;
+      seen.add(normalized);
+
+      if (normalized.endsWith(".css")) {
+        tags.push(`<link rel="stylesheet" href="/${normalized}" />`);
+      } else if (normalized.endsWith(".js")) {
+        // Skip lazy chunks
+        if (lazySet && lazySet.has(normalized)) continue;
+        tags.push(`<link rel="modulepreload" href="/${normalized}" />`);
+        tags.push(`<script type="module" src="/${normalized}" crossorigin></script>`);
+      }
+    }
+  }
+
+  return tags.join("\n  ");
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Architecture Deep Dive" icon="sitemap" href="/advanced/architecture-deep-dive">
+    Core architecture and design decisions
+  </Card>
+  <Card title="RSC Integration" icon="server" href="/advanced/rsc-integration">
+    React Server Components integration
+  </Card>
+  <Card title="Virtual Modules" icon="cube" href="/advanced/virtual-modules">
+    Virtual module system explained
+  </Card>
+  <Card title="Deployment" icon="rocket" href="/guides/deployment">
+    Deploy to Cloudflare Workers
+  </Card>
+</CardGroup>

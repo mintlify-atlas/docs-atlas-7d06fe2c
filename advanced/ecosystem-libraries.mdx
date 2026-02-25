@@ -1,0 +1,352 @@
+---
+title: Ecosystem Library Support
+description: Third-party Next.js library compatibility with vinext
+---
+
+## Overview
+
+vinext aims to be compatible with the Next.js ecosystem. Libraries that only import from `next/*` public APIs tend to work out of the box. Libraries that depend on Next.js build plugins or internal APIs may need custom shimming.
+
+<Note>
+  **Compatibility Pattern**: Libraries importing from documented `next/*` modules → ✅ Works
+  
+  Libraries requiring Next.js build plugins → ⚠️ Needs integration work
+</Note>
+
+## Verified Compatible Libraries
+
+These libraries have been tested and work with vinext:
+
+### UI and Theming
+
+#### next-themes
+
+**Status: ✅ Full Support**
+
+```bash
+npm install next-themes
+```
+
+```tsx
+import { ThemeProvider, useTheme } from "next-themes";
+
+// In your layout
+export default function RootLayout({ children }) {
+  return (
+    <html suppressHydrationMismatch>
+      <body>
+        <ThemeProvider attribute="class" defaultTheme="system">
+          {children}
+        </ThemeProvider>
+      </body>
+    </html>
+  );
+}
+
+// In your components
+function ThemeToggle() {
+  const { theme, setTheme } = useTheme();
+  return (
+    <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
+      Toggle theme
+    </button>
+  );
+}
+```
+
+**What works:**
+- ThemeProvider
+- `useTheme` hook
+- SSR script injection
+- `suppressHydrationMismatch` handling
+- All theme strategies (class, data-attribute, etc.)
+
+### State Management
+
+#### nuqs (Next.js URL query state)
+
+**Status: ✅ Full Support**
+
+```bash
+npm install nuqs
+```
+
+```tsx
+import { useQueryState } from "nuqs";
+
+function SearchPage() {
+  const [search, setSearch] = useQueryState("q");
+  return (
+    <input
+      value={search || ""}
+      onChange={(e) => setSearch(e.target.value)}
+      placeholder="Search..."
+    />
+  );
+}
+```
+
+**What works:**
+- `useQueryState` hook
+- `useQueryStates` for multiple params
+- Shallow routing
+- SSR with search params
+
+**Implementation note:** nuqs imports `next/navigation.js` (with `.js` extension). vinext's `resolveId` hook strips the extension and redirects through the shim map.
+
+### Content Management
+
+#### MDX Support
+
+**Status: ✅ Via @mdx-js/rollup**
+
+```bash
+npm install @mdx-js/rollup @mdx-js/react
+```
+
+```tsx
+// vite.config.ts
+import { defineConfig } from "vite";
+import vinext from "vinext";
+import mdx from "@mdx-js/rollup";
+
+export default defineConfig({
+  plugins: [
+    vinext(),
+    mdx({
+      providerImportSource: "@mdx-js/react",
+    }),
+  ],
+});
+```
+
+**What works:**
+- `.mdx` files in `app/` directory
+- MDX components
+- Front matter (via remark plugins)
+- Syntax highlighting (via rehype plugins)
+
+**Note:** vinext auto-detects MDX usage and injects `@mdx-js/rollup` automatically in most cases.
+
+#### Nextra (Documentation)
+
+**Status: ✅ With Port**
+
+Nextra's webpack plugin doesn't work with Vite, but the content can be ported. See the [live example](https://nextra-docs-template.vinext.workers.dev).
+
+**Approach:**
+1. Keep MDX content
+2. Use `@mdx-js/rollup` for MDX processing
+3. Build lightweight navigation/layout components
+4. Configure Tailwind for styling
+
+### Image Processing
+
+#### @unpic/react
+
+**Status: ✅ Built-in**
+
+vinext uses [@unpic/react](https://unpic.pics) internally for `next/image` remote image support.
+
+```tsx
+import Image from "next/image";
+
+// Automatically optimized via CDN
+<Image
+  src="https://cdn.example.com/photo.jpg"
+  width={800}
+  height={600}
+  alt="Photo"
+/>
+```
+
+**Supported CDNs (28 providers):**
+- Cloudflare Images
+- Cloudinary
+- Imgix
+- Vercel
+- And 24 more...
+
+## Libraries Requiring Integration Work
+
+### next-intl (Internationalization)
+
+**Status: ⚠️ Requires Deep Integration**
+
+next-intl expects a plugin from `next.config.ts` (`createNextIntlPlugin`) that injects configuration at build time. Simply installing and importing doesn't work.
+
+**Issue:** The plugin architecture is Next.js-specific and injects webpack plugins.
+
+**Potential workaround:** Manual configuration of middleware and context providers, but this doesn't provide full feature parity.
+
+```tsx
+// ❌ This Next.js pattern doesn't work
+import createNextIntlPlugin from "next-intl/plugin";
+const withNextIntl = createNextIntlPlugin();
+
+module.exports = withNextIntl({
+  // config
+});
+
+// ✅ Manual approach (limited features)
+// Requires custom middleware and provider setup
+```
+
+**Status:** Tracking as a future enhancement. PRs welcome.
+
+### Prisma (Database ORM)
+
+**Status: ⚠️ Cloudflare Compatibility Required**
+
+Prisma works with vinext in general, but requires Prisma's Accelerate or Data Proxy for Cloudflare Workers deployment (Prisma generates Node.js-specific binaries by default).
+
+```bash
+# Use Prisma Accelerate for Workers
+npm install @prisma/client @prisma/adapter-d1
+```
+
+```tsx
+import { PrismaClient } from "@prisma/client";
+import { PrismaD1 } from "@prisma/adapter-d1";
+
+export default async function handler(request, env) {
+  const adapter = new PrismaD1(env.DB);
+  const prisma = new PrismaClient({ adapter });
+  // Use prisma client
+}
+```
+
+**What works:**
+- Prisma with D1 adapter
+- Prisma Accelerate
+- Prisma Data Proxy
+
+**What doesn't work:**
+- Direct Prisma Client (native binary) on Cloudflare Workers
+
+### tRPC
+
+**Status: ⚠️ Partial - Needs Testing**
+
+tRPC should work with vinext since it uses standard Next.js APIs, but comprehensive testing hasn't been done yet.
+
+**Expected to work:**
+- API route handlers
+- React Server Components integration
+- Client-side calls
+
+**Needs verification:**
+- SSR with tRPC
+- Batch requests
+- Subscriptions
+
+## Library Compatibility Patterns
+
+### ✅ Works Out of Box
+
+Libraries that:
+- Only import from documented `next/*` modules
+- Don't require webpack loaders
+- Don't modify Next.js build process
+- Use standard React patterns
+
+**Examples:** next-themes, nuqs, @tanstack/react-query
+
+### ⚠️ Needs Configuration
+
+Libraries that:
+- Require Vite plugin equivalents of webpack loaders
+- Need environment-specific adapters (Cloudflare vs Node.js)
+- Have optional build-time optimizations
+
+**Examples:** Prisma (needs D1 adapter), MDX (needs @mdx-js/rollup)
+
+### ❌ Requires Porting
+
+Libraries that:
+- Deeply integrate with Next.js build plugins
+- Modify webpack config internally
+- Depend on Next.js internals
+- Require compile-time code generation
+
+**Examples:** next-intl (uses createNextIntlPlugin), Nextra (webpack-based)
+
+## Testing a Library
+
+To test if a library works with vinext:
+
+1. **Install the library**
+
+```bash
+npm install library-name
+```
+
+2. **Import and use it normally**
+
+```tsx
+import { Component } from "library-name";
+
+export default function Page() {
+  return <Component />;
+}
+```
+
+3. **Run the dev server**
+
+```bash
+vinext dev
+```
+
+4. **Check for errors**
+
+- Module resolution errors → May need Vite plugin or alias
+- Build plugin errors → May need manual configuration or porting
+- Runtime errors → Check Cloudflare Workers compatibility
+
+## Reporting Library Compatibility
+
+If you test a library with vinext:
+
+1. [Open an issue](https://github.com/cloudflare/vinext/issues) with:
+   - Library name and version
+   - What works / what doesn't
+   - Any configuration needed
+   - Reproduction steps
+
+2. Consider submitting a PR to add the library to this page
+
+## Extension: .js Import Handling
+
+Some libraries (like nuqs) import Next.js modules with `.js` extensions:
+
+```tsx
+import { useRouter } from "next/navigation.js";
+```
+
+vinext's `resolveId` hook automatically strips `.js` from `next/*` imports and redirects through the shim map. This is handled transparently.
+
+## Future Work
+
+Libraries we're tracking for better support:
+
+- **next-intl**: Build plugin integration
+- **next-auth**: Full testing and documentation
+- **tRPC**: Comprehensive testing
+- **next-seo**: Verification with metadata API
+- **@vercel/analytics**: Cloudflare Analytics adapter
+
+## Contributing Library Support
+
+To add support for a library:
+
+1. **For simple libraries**: Just document the usage pattern
+2. **For libraries needing shims**: Add a shim to `packages/vinext/src/shims/`
+3. **For libraries needing build plugins**: Create a Vite plugin equivalent
+4. **Add tests**: Add integration tests to `tests/fixtures/`
+5. **Document**: Update this page with usage examples
+
+See [CONTRIBUTING.md](https://github.com/cloudflare/vinext/blob/main/CONTRIBUTING.md) for details.
+
+<Tip>
+  Most Next.js libraries "just work" with vinext. If you encounter issues, try using an AI agent to trace through the vinext source and identify the integration point.
+</Tip>

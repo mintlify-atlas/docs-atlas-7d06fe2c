@@ -1,0 +1,469 @@
+---
+title: next/cache
+description: Caching and revalidation APIs
+---
+
+The `next/cache` module provides APIs for controlling cache behavior, including time-based and tag-based revalidation, ISR, and the new Next.js 15+ `"use cache"` directive support.
+
+## Import
+
+```typescript
+import {
+  revalidateTag,
+  revalidatePath,
+  updateTag,
+  refresh,
+  unstable_cache,
+  cacheLife,
+  cacheTag,
+  noStore,
+} from 'next/cache'
+
+import type {
+  CacheHandler,
+  CacheHandlerValue,
+  IncrementalCacheValue,
+} from 'next/cache'
+```
+
+## Cache Functions
+
+### revalidateTag
+
+Revalidate cached data associated with a specific cache tag.
+
+```typescript
+import { revalidateTag } from 'next/cache'
+
+export async function revalidatePosts() {
+  revalidateTag('posts')
+}
+```
+
+<ParamField path="tag" type="string" required>
+  Cache tag to revalidate.
+</ParamField>
+
+<ParamField path="profile" type="string | { expire?: number }">
+  **Next.js 16+**: cacheLife profile for stale-while-revalidate.
+  
+  ```typescript
+  revalidateTag('posts', 'hours')  // Use 'hours' profile
+  revalidateTag('posts', { expire: 3600 })  // Custom expire time
+  ```
+</ParamField>
+
+#### Usage with fetch
+
+```typescript
+// Tag a fetch request
+const posts = await fetch('https://api.example.com/posts', {
+  next: { tags: ['posts'] }
+})
+
+// Later: revalidate all 'posts' fetches
+revalidateTag('posts')
+```
+
+#### Usage with unstable_cache
+
+```typescript
+const getCachedPosts = unstable_cache(
+  async () => getPosts(),
+  ['posts-list'],
+  { tags: ['posts'] }
+)
+
+// Later: revalidate all 'posts' cached functions
+revalidateTag('posts')
+```
+
+### revalidatePath
+
+Revalidate cached data for a specific path.
+
+```typescript
+import { revalidatePath } from 'next/cache'
+
+export async function updatePost(id: string) {
+  await db.posts.update(id)
+  revalidatePath('/blog')
+  revalidatePath(`/blog/${id}`)
+}
+```
+
+<ParamField path="path" type="string" required>
+  Path to revalidate (e.g., `/blog`, `/products/123`).
+</ParamField>
+
+<ParamField path="type" type="'page' | 'layout'">
+  **Next.js 14+**: Revalidate type.
+  - `'page'` — Revalidate specific page
+  - `'layout'` — Revalidate layout and all children
+</ParamField>
+
+#### Example: Server Action
+
+```tsx
+'use server'
+import { revalidatePath } from 'next/cache'
+
+export async function createPost(formData: FormData) {
+  const post = await db.posts.create({
+    title: formData.get('title'),
+    content: formData.get('content'),
+  })
+  
+  // Revalidate the blog list page
+  revalidatePath('/blog')
+  
+  return { success: true, id: post.id }
+}
+```
+
+### updateTag
+
+Expire and immediately refresh cached data for a tag (Next.js 16+).
+
+```typescript
+import { updateTag } from 'next/cache'
+
+export async function updatePost(id: string) {
+  await db.posts.update(id)
+  updateTag('posts')  // Expire immediately
+}
+```
+
+Provides **read-your-writes** semantics: the cache entry is expired and fresh data is read within the same request, so users immediately see their changes.
+
+<ParamField path="tag" type="string" required>
+  Cache tag to expire and refresh.
+</ParamField>
+
+### refresh
+
+Refresh uncached (dynamic) data on the page (Next.js 16+).
+
+```typescript
+import { refresh } from 'next/cache'
+
+export async function markAsRead(notificationId: string) {
+  await db.notifications.markAsRead(notificationId)
+  refresh()  // Re-fetch dynamic data
+}
+```
+
+Signals the client to re-fetch dynamic data without touching the cache. Useful for notification counts, live metrics, or status indicators.
+
+### noStore
+
+Opt out of caching for the current component/function.
+
+```tsx
+import { noStore } from 'next/cache'
+
+export default async function RealTimePage() {
+  noStore()  // Mark as dynamic
+  
+  const data = await getRealTimeData()
+  return <div>{data.value}</div>
+}
+```
+
+Equivalent to setting `Cache-Control: no-store` on the response. Also available as `unstable_noStore()`.
+
+## unstable_cache
+
+Wrap an async function with caching.
+
+```typescript
+import { unstable_cache } from 'next/cache'
+
+const getCachedUser = unstable_cache(
+  async (id: string) => {
+    return await db.users.findById(id)
+  },
+  ['user'],
+  {
+    tags: ['user'],
+    revalidate: 3600  // 1 hour
+  }
+)
+
+const user = await getCachedUser('123')
+```
+
+### Parameters
+
+<ParamField path="fn" type="(...args: any[]) => Promise<T>" required>
+  Async function to wrap.
+</ParamField>
+
+<ParamField path="keyParts" type="string[]">
+  Cache key components. Combined with serialized arguments to form the final key.
+  
+  ```typescript
+  unstable_cache(
+    (id) => getUser(id),
+    ['user']  // Final key: unstable_cache:user:{"id":"123"}
+  )
+  ```
+</ParamField>
+
+<ParamField path="options" type="object">
+  Cache options.
+  
+  ```typescript
+  interface UnstableCacheOptions {
+    revalidate?: number | false  // Seconds, or false for no expiry
+    tags?: string[]              // Cache tags for revalidation
+  }
+  ```
+</ParamField>
+
+### Example: Cached API Call
+
+```typescript
+import { unstable_cache } from 'next/cache'
+
+const getCachedPosts = unstable_cache(
+  async () => {
+    const res = await fetch('https://api.example.com/posts')
+    return res.json()
+  },
+  ['posts-api'],
+  {
+    revalidate: 60,  // Revalidate every 60 seconds
+    tags: ['posts']
+  }
+)
+
+export default async function BlogPage() {
+  const posts = await getCachedPosts()
+  return <PostList posts={posts} />
+}
+```
+
+## "use cache" APIs (Next.js 15+)
+
+### cacheLife
+
+Set cache lifetime for a `"use cache"` function.
+
+```typescript
+'use cache'
+import { cacheLife } from 'next/cache'
+
+export async function getPosts() {
+  cacheLife('hours')  // Use 'hours' profile
+  return await db.posts.findMany()
+}
+```
+
+<ParamField path="profile" type="string | CacheLifeConfig" required>
+  Built-in profile name or custom config.
+  
+  **Built-in profiles:**
+  - `'default'` — 15 min revalidate, ~49 day expire
+  - `'seconds'` — 30s stale, 1s revalidate, 60s expire
+  - `'minutes'` — 5 min stale, 1 min revalidate, 1h expire
+  - `'hours'` — 5 min stale, 1h revalidate, 1 day expire
+  - `'days'` — 5 min stale, 1 day revalidate, 1 week expire
+  - `'weeks'` — 5 min stale, 1 week revalidate, 1 month expire
+  - `'max'` — 5 min stale, 1 month revalidate, 1 year expire
+  
+  **Custom config:**
+  ```typescript
+  interface CacheLifeConfig {
+    stale?: number      // Client cache duration (seconds)
+    revalidate?: number // Server revalidation interval (seconds)
+    expire?: number     // Max staleness before deopt (seconds)
+  }
+  ```
+</ParamField>
+
+#### Example: Custom Profile
+
+```typescript
+'use cache'
+import { cacheLife } from 'next/cache'
+
+export async function getPopularPosts() {
+  cacheLife({
+    stale: 60,         // Client can cache for 60s
+    revalidate: 300,   // Server refreshes every 5 min
+    expire: 3600       // Hard expire after 1 hour
+  })
+  
+  return await db.posts.findMany({
+    orderBy: { views: 'desc' }
+  })
+}
+```
+
+### cacheTag
+
+Tag a `"use cache"` function for revalidation.
+
+```typescript
+'use cache'
+import { cacheTag } from 'next/cache'
+
+export async function getPosts() {
+  cacheTag('posts', 'blog')
+  return await db.posts.findMany()
+}
+
+// Later: revalidate
+revalidateTag('posts')
+```
+
+<ParamField path="...tags" type="string[]" required>
+  Tags to attach to the cached result.
+</ParamField>
+
+## Cache Handler
+
+Plug in a custom cache backend (Redis, DynamoDB, Cloudflare KV, etc.).
+
+### Interface
+
+```typescript
+import type { CacheHandler, IncrementalCacheValue } from 'next/cache'
+
+class MyCacheHandler implements CacheHandler {
+  async get(key: string): Promise<CacheHandlerValue | null> {
+    // Return cached entry or null
+  }
+  
+  async set(key: string, data: IncrementalCacheValue | null): Promise<void> {
+    // Store cache entry
+  }
+  
+  async revalidateTag(tags: string | string[]): Promise<void> {
+    // Invalidate entries with matching tags
+  }
+}
+```
+
+### Usage
+
+```typescript
+import { setCacheHandler } from 'next/cache'
+import { MyCacheHandler } from './cache'
+
+// At server startup
+setCacheHandler(new MyCacheHandler())
+```
+
+### Built-in Handlers
+
+#### MemoryCacheHandler
+
+In-memory cache (default). Not shared across workers/instances.
+
+```typescript
+import { MemoryCacheHandler } from 'next/cache'
+```
+
+#### Cloudflare KV Handler
+
+vinext includes a KV-backed handler for Cloudflare Workers:
+
+```typescript
+import { createKVCacheHandler } from 'vinext/cache/kv'
+
+const handler = createKVCacheHandler(env.CACHE_KV)
+setCacheHandler(handler)
+```
+
+### CacheHandlerValue Type
+
+```typescript
+interface CacheHandlerValue {
+  lastModified: number
+  age?: number
+  cacheState?: 'stale' | 'fresh'
+  value: IncrementalCacheValue | null
+}
+
+type IncrementalCacheValue =
+  | CachedFetchValue
+  | CachedAppPageValue
+  | CachedRouteValue
+  | CachedImageValue
+```
+
+## ISR (Incremental Static Regeneration)
+
+vinext supports time-based and tag-based ISR:
+
+### Time-Based Revalidation
+
+```tsx
+// Revalidate every 60 seconds
+export const revalidate = 60
+
+export default async function Page() {
+  const posts = await getPosts()
+  return <PostList posts={posts} />
+}
+```
+
+### Tag-Based Revalidation
+
+```tsx
+export default async function Page() {
+  const posts = await fetch('https://api.example.com/posts', {
+    next: { tags: ['posts'] }
+  })
+  
+  return <PostList posts={await posts.json()} />
+}
+
+// In a Server Action:
+import { revalidateTag } from 'next/cache'
+
+export async function createPost() {
+  await db.posts.create(...)
+  revalidateTag('posts')
+}
+```
+
+### Stale-While-Revalidate
+
+vinext's ISR layer implements SWR:
+
+1. **Fresh**: Serve cached entry immediately
+2. **Stale**: Serve stale entry, trigger background revalidation
+3. **Expired**: Return null (or skip cache)
+
+## Cache Deduplication
+
+Multiple concurrent requests for the same cache key are deduplicated:
+
+```typescript
+// Only one fetch occurs, even if called 10 times simultaneously
+const promises = Array.from({ length: 10 }, () => getCachedPosts())
+await Promise.all(promises)
+```
+
+## Limitations
+
+<Warning>
+  **Cache key collisions**: If two functions use the same `keyParts` and arguments, they share a cache entry. Use unique keys.
+</Warning>
+
+<Warning>
+  **Serialization**: Arguments and return values are JSON-serialized. Functions, Symbols, and undefined are not supported.
+</Warning>
+
+<Warning>
+  **Server-only**: All cache APIs are server-side only. Calling them in client components will throw.
+</Warning>
+
+## Source
+
+[View source code →](https://github.com/stackblitz/vinext/blob/main/packages/vinext/src/shims/cache.ts)
+
+Implementation: `/home/daytona/workspace/source/packages/vinext/src/shims/cache.ts`

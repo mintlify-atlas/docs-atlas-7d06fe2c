@@ -1,0 +1,382 @@
+---
+title: next/dynamic
+description: Code splitting and lazy loading with React.lazy and Suspense
+---
+
+The `next/dynamic` module provides SSR-safe dynamic imports with code splitting, loading states, and client-only rendering options.
+
+## Import
+
+```typescript
+import dynamic from 'next/dynamic'
+```
+
+## Basic Usage
+
+```tsx
+import dynamic from 'next/dynamic'
+
+const DynamicComponent = dynamic(() => import('./HeavyComponent'))
+
+export default function Page() {
+  return (
+    <div>
+      <h1>My Page</h1>
+      <DynamicComponent />
+    </div>
+  )
+}
+```
+
+The component is code-split into a separate bundle and loaded on-demand.
+
+## API Reference
+
+### dynamic
+
+```typescript
+function dynamic<P>(
+  loader: () => Promise<{ default: ComponentType<P> } | ComponentType<P>>,
+  options?: DynamicOptions
+): ComponentType<P>
+```
+
+<ParamField path="loader" type="() => Promise<Component>" required>
+  Function that returns a dynamic import.
+  
+  ```tsx
+  dynamic(() => import('./Component'))
+  dynamic(() => import('./Component').then(mod => mod.NamedExport))
+  ```
+</ParamField>
+
+<ParamField path="options" type="DynamicOptions">
+  Loading and rendering options.
+  
+  ```typescript
+  interface DynamicOptions {
+    loading?: ComponentType<{ error?: Error | null; isLoading?: boolean; pastDelay?: boolean }>
+    ssr?: boolean
+  }
+  ```
+</ParamField>
+
+## Options
+
+### loading
+
+Component shown while the dynamic component is loading.
+
+```tsx
+const DynamicChart = dynamic(() => import('./Chart'), {
+  loading: () => <div>Loading chart...</div>
+})
+```
+
+The loading component receives props:
+
+<ResponseField name="isLoading" type="boolean">
+  Whether the component is currently loading.
+</ResponseField>
+
+<ResponseField name="error" type="Error | null">
+  Error if the import failed.
+  
+  ```tsx
+  const DynamicComponent = dynamic(() => import('./Component'), {
+    loading: ({ isLoading, error }) => {
+      if (error) return <div>Failed to load: {error.message}</div>
+      if (isLoading) return <div>Loading...</div>
+      return null
+    }
+  })
+  ```
+</ResponseField>
+
+<ResponseField name="pastDelay" type="boolean">
+  Whether the loading state has been showing long enough (always `true` in vinext).
+</ResponseField>
+
+### ssr
+
+Whether to render the component on the server.
+
+```tsx
+const ClientOnlyComponent = dynamic(() => import('./ClientOnly'), {
+  ssr: false
+})
+```
+
+When `ssr: false`:
+- **Server**: Renders the loading component (or nothing)
+- **Client**: Loads and renders the component after hydration
+
+Useful for components that depend on browser APIs:
+
+```tsx
+const Map = dynamic(() => import('./LeafletMap'), {
+  ssr: false,
+  loading: () => <div>Loading map...</div>
+})
+```
+
+## Examples
+
+### With Named Export
+
+```tsx
+import dynamic from 'next/dynamic'
+
+const DynamicEditor = dynamic(
+  () => import('./Editor').then(mod => mod.Editor)
+)
+```
+
+### With Loading State
+
+```tsx
+import dynamic from 'next/dynamic'
+
+function LoadingSpinner() {
+  return (
+    <div className="flex justify-center p-4">
+      <div className="animate-spin rounded-full h-8 w-8 border-b-2" />
+    </div>
+  )
+}
+
+const DynamicComponent = dynamic(
+  () => import('./HeavyComponent'),
+  { loading: LoadingSpinner }
+)
+```
+
+### Client-Only Component
+
+```tsx
+import dynamic from 'next/dynamic'
+
+const DynamicChart = dynamic(
+  () => import('./Chart'),
+  {
+    ssr: false,
+    loading: () => <div>Initializing chart...</div>
+  }
+)
+
+export default function Analytics() {
+  return (
+    <div>
+      <h1>Analytics Dashboard</h1>
+      <DynamicChart data={data} />
+    </div>
+  )
+}
+```
+
+### Multiple Dynamic Components
+
+```tsx
+import dynamic from 'next/dynamic'
+
+const Header = dynamic(() => import('./Header'))
+const Sidebar = dynamic(() => import('./Sidebar'))
+const Content = dynamic(() => import('./Content'))
+
+export default function Layout({ children }) {
+  return (
+    <div>
+      <Header />
+      <div className="flex">
+        <Sidebar />
+        <Content>{children}</Content>
+      </div>
+    </div>
+  )
+}
+```
+
+### Error Handling
+
+```tsx
+import dynamic from 'next/dynamic'
+
+const DynamicComponent = dynamic(
+  () => import('./Component'),
+  {
+    loading: ({ error, isLoading }) => {
+      if (error) {
+        console.error('Failed to load component:', error)
+        return (
+          <div className="error">
+            <p>Failed to load component</p>
+            <button onClick={() => window.location.reload()}>
+              Retry
+            </button>
+          </div>
+        )
+      }
+      
+      if (isLoading) {
+        return <div>Loading...</div>
+      }
+      
+      return null
+    }
+  }
+)
+```
+
+## How It Works
+
+### Server-Side (SSR Enabled)
+
+vinext uses `React.lazy` with `Suspense`:
+
+```tsx
+const LazyComponent = React.lazy(() => import('./Component'))
+
+function DynamicWrapper(props) {
+  return (
+    <Suspense fallback={<LoadingComponent />}>
+      <LazyComponent {...props} />
+    </Suspense>
+  )
+}
+```
+
+`renderToReadableStream` suspends until the dynamic component loads.
+
+### Client-Side
+
+Standard `React.lazy` for code splitting:
+
+```tsx
+const LazyComponent = React.lazy(() => import('./Component'))
+
+<Suspense fallback={<Loading />}>
+  <LazyComponent />
+</Suspense>
+```
+
+Vite automatically creates separate chunks for dynamic imports.
+
+### SSR: false
+
+**Server**: Renders loading state or nothing
+
+**Client**: Uses `useEffect` to detect mount, then loads the component:
+
+```tsx
+function ClientOnly(props) {
+  const [mounted, setMounted] = useState(false)
+  
+  useEffect(() => setMounted(true), [])
+  
+  if (!mounted) return <Loading />
+  
+  return <LazyComponent {...props} />
+}
+```
+
+## Use Cases
+
+### Heavy Third-Party Libraries
+
+```tsx
+// Chart.js is 200KB — don't load it on every page
+const Chart = dynamic(() => import('react-chartjs-2').then(m => m.Chart), {
+  ssr: false
+})
+```
+
+### Admin Panels
+
+```tsx
+// Only load admin UI when needed
+const AdminPanel = dynamic(() => import('./AdminPanel'), {
+  loading: () => <div>Loading admin panel...</div>
+})
+
+export default function AdminPage() {
+  const { isAdmin } = useUser()
+  
+  if (!isAdmin) return <div>Access denied</div>
+  
+  return <AdminPanel />
+}
+```
+
+### Modal Dialogs
+
+```tsx
+const Modal = dynamic(() => import('./Modal'))
+
+export default function Page() {
+  const [isOpen, setIsOpen] = useState(false)
+  
+  return (
+    <div>
+      <button onClick={() => setIsOpen(true)}>Open Modal</button>
+      {isOpen && <Modal onClose={() => setIsOpen(false)} />}
+    </div>
+  )
+}
+```
+
+### Browser-Only Features
+
+```tsx
+// Geolocation, Canvas, WebGL, etc.
+const MapComponent = dynamic(() => import('./Map'), {
+  ssr: false,
+  loading: () => <div>Loading map...</div>
+})
+```
+
+## Limitations
+
+<Warning>
+  **Top-level only**: `dynamic()` must be called at the module level, not inside components or conditionals.
+</Warning>
+
+```tsx
+// ✅ Correct
+const DynamicComponent = dynamic(() => import('./Component'))
+
+function Page() {
+  return <DynamicComponent />
+}
+
+// ❌ Wrong
+function Page() {
+  const DynamicComponent = dynamic(() => import('./Component'))
+  return <DynamicComponent />
+}
+```
+
+<Warning>
+  **No server-side props**: Dynamic components cannot receive props from `getServerSideProps` in the traditional sense. Pass props explicitly.
+</Warning>
+
+<Warning>
+  **Loading flicker**: With `ssr: false`, the client always shows the loading state first (even if hydrating), causing a brief flicker.
+</Warning>
+
+## Comparison with React.lazy
+
+vinext's `dynamic` is a thin wrapper around `React.lazy` + `Suspense`:
+
+| Feature | dynamic | React.lazy |
+|---------|---------|------------|
+| Code splitting | ✅ | ✅ |
+| SSR support | ✅ | ❌ |
+| Loading state | ✅ | Manual |
+| Error handling | ✅ | Manual |
+| `ssr: false` | ✅ | Manual |
+
+## Source
+
+[View source code →](https://github.com/stackblitz/vinext/blob/main/packages/vinext/src/shims/dynamic.ts)
+
+Implementation: `/home/daytona/workspace/source/packages/vinext/src/shims/dynamic.ts`

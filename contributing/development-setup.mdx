@@ -1,0 +1,167 @@
+---
+title: Development Setup
+description: Setting up your local environment for vinext development
+---
+
+This guide covers setting up vinext for local development from source.
+
+## Prerequisites
+
+- Node.js 18 or later
+- pnpm (the project uses pnpm workspaces)
+- Git
+
+## Local setup from source
+
+If you're working from the repo instead of installing from npm:
+
+```bash
+git clone https://github.com/cloudflare/vinext.git
+cd vinext
+pnpm install
+pnpm run build
+```
+
+This compiles the vinext package to `packages/vinext/dist/`. For active development, use `pnpm --filter vinext run dev` to run `tsc --watch`.
+
+## Linking to an external project
+
+To use your local vinext build against an external Next.js app, link the built package:
+
+```bash
+# From your Next.js project directory:
+pnpm link /path/to/vinext/packages/vinext
+```
+
+Or add it to your `package.json` as a file dependency:
+
+```json
+{
+  "dependencies": {
+    "vinext": "file:/path/to/vinext/packages/vinext"
+  }
+}
+```
+
+vinext has peer dependencies on `react ^19.2.4`, `react-dom ^19.2.4`, and `vite ^7.0.0`. Then replace `next` with `vinext` in your scripts and run as normal.
+
+## Commands
+
+```bash
+pnpm test             # Vitest unit + integration tests
+pnpm run test:e2e     # Playwright E2E tests (5 projects)
+pnpm run typecheck    # TypeScript via tsgo (fast)
+pnpm run lint         # oxlint
+pnpm run build        # Build the vinext package
+```
+
+## Project Structure
+
+```
+packages/vinext/src/
+  index.ts              # Main Vite plugin
+  cli.ts                # vinext CLI
+  shims/                # One file per next/* module
+  routing/              # File-system route scanners
+  server/               # SSR handlers, ISR, middleware
+  cloudflare/           # KV cache handler
+
+tests/
+  *.test.ts             # Vitest tests
+  fixtures/             # Test apps (pages-basic, app-basic, etc.)
+  e2e/                  # Playwright tests
+
+examples/               # User-facing demo apps
+```
+
+### Key Files
+
+| File | Purpose |
+|------|---------||
+| `index.ts` | Vite plugin — resolves `next/*` imports, generates virtual modules |
+| `shims/*.ts` | Reimplementations of `next/link`, `next/navigation`, etc. |
+| `server/dev-server.ts` | Pages Router SSR handler |
+| `server/app-dev-server.ts` | App Router RSC entry generator |
+| `routing/pages-router.ts` | Scans `pages/` directory |
+| `routing/app-router.ts` | Scans `app/` directory |
+
+### Test Fixtures
+
+- `tests/fixtures/pages-basic/` — Pages Router test app
+- `tests/fixtures/app-basic/` — App Router test app
+- `examples/app-router-cloudflare/` — App Router on Workers
+- `examples/pages-router-cloudflare/` — Pages Router on Workers
+
+Add new test pages to fixtures, not to examples. Examples are for user-facing demos.
+
+### Examples (Ecosystem Ports)
+
+The `examples/` directory contains real-world Next.js apps ported to run on vinext. These are deployed to Cloudflare Workers on every push to main (see `.github/workflows/deploy-examples.yml`).
+
+| Example | Type | URL |
+|---------|------|-----||
+| `app-router-cloudflare` | App Router basics | `app-router-cloudflare.vinext.workers.dev` |
+| `pages-router-cloudflare` | Pages Router basics | `pages-router-cloudflare.vinext.workers.dev` |
+| `app-router-playground` | Next.js playground (MDX, Tailwind) | `app-router-playground.vinext.workers.dev` |
+| `realworld-api-rest` | RealWorld spec (Pages Router) | `realworld-api-rest.vinext.workers.dev` |
+| `nextra-docs-template` | Nextra docs site (MDX, App Router) | `nextra-docs-template.vinext.workers.dev` |
+| `benchmarks` | Performance benchmarks | `benchmarks.vinext.workers.dev` |
+| `hackernews` | HN clone (App Router, RSC) | `hackernews.vinext.workers.dev` |
+
+## Git Workflow
+
+<Warning>
+**NEVER push directly to main.** Always create a feature branch and open a PR, even for small fixes. This ensures CI runs before changes are merged and provides a review checkpoint.
+</Warning>
+
+Branch protection is enabled on main. Required checks: Lint, Typecheck, Vitest, Playwright E2E. Pushing directly to main bypasses these protections and can introduce regressions.
+
+<Warning>
+**NEVER use `gh pr merge --admin`.** The `--admin` flag bypasses branch protection checks entirely. If merge is blocked, investigate why — don't force it through. A blocked merge usually means a required check failed or is still running.
+</Warning>
+
+### PR workflow
+
+1. Create a branch: `git checkout -b fix/descriptive-name`
+2. Make changes and commit
+3. Push branch: `git push -u origin fix/descriptive-name`
+4. Open PR via `gh pr create`
+5. Wait for CI to pass — all required checks (Lint, Typecheck, Vitest, Playwright E2E) must be green
+6. Merge via `gh pr merge --squash --delete-branch`
+7. If merge is blocked, check which status check failed and fix it — do not bypass with `--admin`
+
+## Debugging
+
+- **Dev server logs**: Run `npx vite dev` in a fixture directory
+- **RSC streaming issues**: Context is often cleared before stream consumption — check AsyncLocalStorage usage
+- **Module resolution**: Vite has separate module instances for RSC/SSR/client environments
+
+## Research Tools
+
+### Context7 MCP
+
+Context7 provides fast access to up-to-date documentation and source code for libraries. Use it liberally when researching how to implement something or debugging behavior.
+
+**Key library IDs for this project:**
+- `/vercel/next.js` — Next.js source code and docs
+- `/llmstxt/nextjs_llms_txt` — Extended Next.js documentation
+- `/vitejs/vite-plugin-react` — Vite RSC plugin docs
+
+**Example queries:**
+- How Next.js implements `headers()` and `cookies()` internally
+- AsyncLocalStorage patterns for request-scoped context
+- RSC streaming and rendering lifecycle
+- Route matching and middleware patterns
+
+### EXA Search
+
+Use EXA for web search when you need to find recent discussions, blog posts, GitHub issues, or documentation that isn't in Context7. Particularly useful for:
+- Finding workarounds for edge cases
+- Understanding how other frameworks solved similar problems
+- Locating relevant GitHub issues and discussions
+
+### Looking at Next.js Source
+
+**When in doubt, look at how Next.js does it.** Vinext aims to replicate Next.js behavior, so their implementation is the authoritative reference.
+
+If you're trying to understand how something works under the hood — route matching, RSC streaming, caching behavior, API semantics — the best approach is to go look at the Next.js source code and understand what they're doing, then apply it to how we do things in this project.

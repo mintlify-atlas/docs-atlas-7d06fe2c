@@ -1,0 +1,698 @@
+---
+title: Configuration Guide
+description: Configure vinext and customize the Vite build process
+---
+
+# Configuration Guide
+
+vinext automatically loads your Next.js configuration and translates it to Vite. This guide covers both Next.js config options and Vite customization.
+
+## Next.js Configuration
+
+vinext loads and respects your existing `next.config.js`:
+
+```javascript
+// next.config.js
+module.exports = {
+  reactStrictMode: true,
+  basePath: '/docs',
+  trailingSlash: true,
+  images: {
+    remotePatterns: [
+      {
+        protocol: 'https',
+        hostname: 'cdn.example.com',
+      },
+    ],
+  },
+};
+```
+
+vinext auto-detects configuration file formats:
+- `next.config.js` (CommonJS)
+- `next.config.mjs` (ES modules)
+- `next.config.ts` (TypeScript)
+- `next.config.cjs` (CommonJS with .cjs extension)
+
+### Supported Config Options
+
+#### `basePath`
+
+Add a path prefix to your application:
+
+```javascript
+module.exports = {
+  basePath: '/docs',
+};
+```
+
+All routes, links, and assets are automatically prefixed:
+- `/` → `/docs/`
+- `/about` → `/docs/about`
+- `<Link href="/blog">` → `/docs/blog`
+
+#### `trailingSlash`
+
+Control URL trailing slashes:
+
+```javascript
+module.exports = {
+  trailingSlash: true, // /about/ instead of /about
+};
+```
+
+vinext automatically redirects to the canonical form (308 Permanent Redirect).
+
+#### `env`
+
+Add custom environment variables:
+
+```javascript
+module.exports = {
+  env: {
+    CUSTOM_KEY: 'my-value',
+  },
+};
+```
+
+Access via `process.env.CUSTOM_KEY` in both server and client code.
+
+<Note>
+  `NEXT_PUBLIC_*` variables are always available on the client. Other variables are server-only unless explicitly added to `env`.
+</Note>
+
+#### `output`
+
+Control build output format:
+
+```javascript
+module.exports = {
+  output: 'export', // Static site generation
+};
+```
+
+**Options**:
+- `'export'` - Full static export (no server required)
+- `'standalone'` - Self-contained server (Node.js deployment)
+- `undefined` - Default (SSR + static optimization)
+
+See [Static Export Guide](/guides/static-export) for details.
+
+#### `images`
+
+Configure image optimization:
+
+```javascript
+module.exports = {
+  images: {
+    remotePatterns: [
+      {
+        protocol: 'https',
+        hostname: 'cdn.example.com',
+        port: '',
+        pathname: '/images/**',
+      },
+    ],
+    domains: ['legacy.example.com'], // Legacy API
+    unoptimized: false, // Set true to disable optimization
+  },
+};
+```
+
+<Warning>
+  vinext performs runtime image optimization, not build-time. The config controls allowed origins but doesn't affect build output.
+</Warning>
+
+#### `redirects`
+
+URL redirects with pattern matching:
+
+```javascript
+module.exports = {
+  async redirects() {
+    return [
+      {
+        source: '/old-blog/:slug',
+        destination: '/blog/:slug',
+        permanent: true, // 308 redirect
+      },
+      {
+        source: '/docs',
+        destination: '/docs/introduction',
+        permanent: false, // 307 redirect
+      },
+    ];
+  },
+};
+```
+
+**Features**:
+- Path parameters (`:param`)
+- Wildcards (`:path*` for catch-all)
+- Conditional redirects with `has`/`missing`
+
+#### `rewrites`
+
+Rewrite URLs without changing the browser address:
+
+```javascript
+module.exports = {
+  async rewrites() {
+    return [
+      {
+        source: '/api/:path*',
+        destination: 'https://api.example.com/:path*',
+      },
+    ];
+  },
+};
+```
+
+**Three phases**:
+```javascript
+module.exports = {
+  async rewrites() {
+    return {
+      beforeFiles: [
+        // Checked before pages/app/ files
+        { source: '/some-page', destination: '/somewhere-else' },
+      ],
+      afterFiles: [
+        // Checked after pages/app/ files
+        { source: '/fallback/:path*', destination: '/api/:path*' },
+      ],
+      fallback: [
+        // Checked after static files (public/)
+        { source: '/:path*', destination: '/404' },
+      ],
+    };
+  },
+};
+```
+
+#### `headers`
+
+Add custom HTTP headers:
+
+```javascript
+module.exports = {
+  async headers() {
+    return [
+      {
+        source: '/api/:path*',
+        headers: [
+          { key: 'Access-Control-Allow-Origin', value: '*' },
+          { key: 'Access-Control-Allow-Methods', value: 'GET,POST' },
+        ],
+      },
+    ];
+  },
+};
+```
+
+#### `i18n`
+
+Internationalization routing (Pages Router only):
+
+```javascript
+module.exports = {
+  i18n: {
+    locales: ['en', 'fr', 'de'],
+    defaultLocale: 'en',
+    localeDetection: true, // Auto-detect from Accept-Language
+  },
+};
+```
+
+vinext automatically:
+- Prefixes URLs with locale (`/fr/about`, `/de/contact`)
+- Detects locale from `Accept-Language` header
+- Stores preference in `NEXT_LOCALE` cookie
+
+<Note>
+  App Router uses a different i18n approach. See [Next.js i18n docs](https://nextjs.org/docs/app/building-your-application/routing/internationalization) for App Router patterns.
+</Note>
+
+#### `cacheComponents`
+
+Enable the "use cache" directive (Next.js 16+):
+
+```javascript
+module.exports = {
+  cacheComponents: true,
+};
+```
+
+Allows function and page-level caching:
+
+```typescript
+'use cache';
+
+export async function getCachedData() {
+  const data = await fetch('https://api.example.com/data');
+  return data.json();
+}
+```
+
+#### Function-Form Config
+
+Configs can be functions (useful for per-environment settings):
+
+```javascript
+module.exports = (phase, { defaultConfig }) => {
+  if (phase === 'phase-development-server') {
+    return {
+      /* development config */
+    };
+  }
+
+  return {
+    /* production config */
+  };
+};
+```
+
+**Available phases**:
+- `phase-development-server` - `vinext dev`
+- `phase-production-build` - `vinext build`
+- `phase-production-server` - `vinext start`
+
+## Vite Configuration
+
+For advanced customization, create a `vite.config.ts`:
+
+```typescript
+import { defineConfig } from 'vite';
+import vinext from 'vinext';
+
+export default defineConfig({
+  plugins: [vinext()],
+});
+```
+
+### Auto-Generated Config
+
+Running `vinext init` or `vinext deploy` auto-generates a minimal `vite.config.ts`.
+
+**App Router**:
+```typescript
+import { defineConfig } from "vite";
+import vinext from "vinext";
+import { cloudflare } from "@cloudflare/vite-plugin";
+
+export default defineConfig({
+  plugins: [
+    vinext(),
+    cloudflare({
+      viteEnvironment: {
+        name: "rsc",
+        childEnvironments: ["ssr"],
+      },
+    }),
+  ],
+});
+```
+
+**Pages Router**:
+```typescript
+import { defineConfig } from "vite";
+import vinext from "vinext";
+import { cloudflare } from "@cloudflare/vite-plugin";
+
+export default defineConfig({
+  plugins: [vinext(), cloudflare()],
+});
+```
+
+### TypeScript Path Aliases
+
+vinext automatically resolves TypeScript path aliases from `tsconfig.json`:
+
+```json
+// tsconfig.json
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"],
+      "@/components/*": ["./src/components/*"],
+      "@/lib/*": ["./src/lib/*"]
+    }
+  }
+}
+```
+
+No Vite configuration needed—imports work automatically:
+
+```typescript
+import { Button } from '@/components/ui/button';
+import { fetchData } from '@/lib/api';
+```
+
+This is handled by [`vite-tsconfig-paths`](https://github.com/aleclarson/vite-tsconfig-paths), which vinext injects automatically.
+
+### MDX Support
+
+vinext auto-detects MDX usage and configures `@mdx-js/rollup` with plugins from your Next.js config:
+
+```javascript
+// next.config.js
+const withMDX = require('@next/mdx')({
+  options: {
+    remarkPlugins: [remarkGfm],
+    rehypePlugins: [rehypeHighlight],
+  },
+});
+
+module.exports = withMDX({
+  pageExtensions: ['js', 'jsx', 'ts', 'tsx', 'md', 'mdx'],
+});
+```
+
+vinext extracts the remark/rehype plugins and applies them to `@mdx-js/rollup` automatically.
+
+For manual MDX configuration:
+
+```typescript
+import { defineConfig } from 'vite';
+import vinext from 'vinext';
+import mdx from '@mdx-js/rollup';
+import remarkGfm from 'remark-gfm';
+
+export default defineConfig({
+  plugins: [
+    vinext(),
+    mdx({
+      remarkPlugins: [remarkGfm],
+    }),
+  ],
+});
+```
+
+### CSS and Styling
+
+vinext supports all Vite CSS features out of the box:
+
+#### Tailwind CSS
+
+```bash
+npm install -D tailwindcss postcss autoprefixer
+npx tailwindcss init -p
+```
+
+```javascript
+// tailwind.config.js
+module.exports = {
+  content: [
+    './app/**/*.{js,ts,jsx,tsx}',
+    './pages/**/*.{js,ts,jsx,tsx}',
+    './components/**/*.{js,ts,jsx,tsx}',
+  ],
+};
+```
+
+Import in your root layout:
+
+```css
+/* app/globals.css */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+```
+
+```typescript
+// app/layout.tsx
+import './globals.css';
+```
+
+#### CSS Modules
+
+```css
+/* Button.module.css */
+.button {
+  background: blue;
+  color: white;
+}
+```
+
+```typescript
+import styles from './Button.module.css';
+
+export function Button() {
+  return <button className={styles.button}>Click me</button>;
+}
+```
+
+#### PostCSS
+
+Create `postcss.config.cjs` (note the `.cjs` extension for ESM projects):
+
+```javascript
+module.exports = {
+  plugins: {
+    'tailwindcss': {},
+    'autoprefixer': {},
+  },
+};
+```
+
+### Build Options
+
+```typescript
+export default defineConfig({
+  plugins: [vinext()],
+  build: {
+    target: 'esnext',
+    minify: 'esbuild',
+    sourcemap: true,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          vendor: ['react', 'react-dom'],
+        },
+      },
+    },
+  },
+});
+```
+
+### Dev Server Options
+
+```typescript
+export default defineConfig({
+  plugins: [vinext()],
+  server: {
+    port: 3000,
+    host: '0.0.0.0', // Bind to all interfaces
+    open: true, // Open browser on start
+    cors: true,
+  },
+});
+```
+
+### Optimization
+
+```typescript
+export default defineConfig({
+  plugins: [vinext()],
+  optimizeDeps: {
+    include: ['large-library'], // Force pre-bundle
+    exclude: ['local-package'], // Don't pre-bundle
+  },
+});
+```
+
+### Aliasing Modules
+
+For native modules that can't run in Workers:
+
+```typescript
+import path from 'node:path';
+
+export default defineConfig({
+  plugins: [vinext()],
+  resolve: {
+    alias: {
+      'sharp': path.resolve(__dirname, 'empty-stub.js'),
+      '@resvg/resvg-js': path.resolve(__dirname, 'empty-stub.js'),
+    },
+  },
+});
+```
+
+```javascript
+// empty-stub.js
+export default {};
+```
+
+<Note>
+  vinext automatically stubs common native modules (`sharp`, `resvg`, `satori`, `lightningcss`, `@napi-rs/canvas`) during `vinext deploy`.
+</Note>
+
+### Environment-Specific Config
+
+```typescript
+import { defineConfig } from 'vite';
+import vinext from 'vinext';
+
+export default defineConfig(({ mode }) => {
+  const isDev = mode === 'development';
+  const isProd = mode === 'production';
+
+  return {
+    plugins: [vinext()],
+    build: {
+      minify: isProd,
+      sourcemap: isDev,
+    },
+    server: {
+      port: isDev ? 3000 : 8080,
+    },
+  };
+});
+```
+
+## Environment Variables
+
+### Development (.env.local)
+
+```bash
+# .env.local (not committed)
+NEXT_PUBLIC_API_URL=http://localhost:3001/api
+DATABASE_URL=postgresql://localhost/mydb
+SECRET_KEY=dev-secret
+```
+
+### Production (.env.production)
+
+```bash
+# .env.production (committed)
+NEXT_PUBLIC_API_URL=https://api.example.com
+```
+
+### Loading Priority
+
+1. `.env.local` (highest priority, not committed)
+2. `.env.production` or `.env.development` (environment-specific)
+3. `.env` (shared defaults)
+
+### Runtime Access
+
+```typescript
+// Server-side
+const dbUrl = process.env.DATABASE_URL;
+
+// Client-side (requires NEXT_PUBLIC_ prefix)
+const apiUrl = process.env.NEXT_PUBLIC_API_URL;
+```
+
+## vinext Plugin Options
+
+The vinext plugin accepts configuration:
+
+```typescript
+import { defineConfig } from 'vite';
+import vinext from 'vinext';
+
+export default defineConfig({
+  plugins: [
+    vinext({
+      // Options coming in future versions
+    }),
+  ],
+});
+```
+
+<Note>
+  Currently, vinext auto-configures based on your Next.js setup and doesn't require explicit options. Future versions may add customization points.
+</Note>
+
+## Migration from Next.js Config
+
+### Webpack Config
+
+**Next.js**:
+```javascript
+module.exports = {
+  webpack: (config) => {
+    config.module.rules.push({
+      test: /\.svg$/,
+      use: ['@svgr/webpack'],
+    });
+    return config;
+  },
+};
+```
+
+**vinext**: Use Vite plugins instead:
+```typescript
+import { defineConfig } from 'vite';
+import vinext from 'vinext';
+import svgr from 'vite-plugin-svgr';
+
+export default defineConfig({
+  plugins: [vinext(), svgr()],
+});
+```
+
+### Experimental Options
+
+Most Next.js experimental options are not needed in vinext:
+
+**Next.js**:
+```javascript
+module.exports = {
+  experimental: {
+    appDir: true, // App Router
+    serverActions: true,
+  },
+};
+```
+
+**vinext**: App Router and Server Actions work by default—no configuration needed.
+
+## Troubleshooting
+
+### Config Not Loading
+
+**Problem**: Changes to `next.config.js` aren't reflected
+
+**Solution**: Restart the dev server. Config is loaded once at startup.
+
+### Path Alias Not Working
+
+**Problem**: Import using `@/...` fails
+
+**Solution**: Ensure `tsconfig.json` has correct `paths` config and `baseUrl` is set.
+
+### PostCSS Error
+
+**Error**: `Error: Cannot find module 'postcss.config.js'`
+
+**Solution**: Rename to `postcss.config.cjs` if your project has `"type": "module"` in `package.json`.
+
+### Environment Variable Not Available
+
+**Problem**: `process.env.MY_VAR` is undefined in client code
+
+**Solution**: Client-side variables must start with `NEXT_PUBLIC_`:
+```bash
+NEXT_PUBLIC_MY_VAR=value
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Deployment" icon="rocket" href="/guides/deployment">
+    Deploy your configured application
+  </Card>
+  <Card title="Cloudflare Workers" icon="cloud" href="/guides/cloudflare-workers">
+    Deploy to Cloudflare with advanced config
+  </Card>
+  <Card title="Static Export" icon="file-export" href="/guides/static-export">
+    Configure static site generation
+  </Card>
+  <Card title="Vite Documentation" icon="bolt" href="https://vitejs.dev/config/">
+    Complete Vite configuration reference
+  </Card>
+</CardGroup>

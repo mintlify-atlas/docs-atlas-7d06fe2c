@@ -1,0 +1,475 @@
+---
+title: RSC Integration
+description: How Vinext integrates React Server Components with Vite
+---
+
+# React Server Components Integration
+
+Vinext's App Router implementation is built on top of `@vitejs/plugin-rsc`, which provides the bundler transforms and runtime infrastructure for React Server Components. This guide explains how the integration works and the patterns used.
+
+## RSC Entry Point
+
+The RSC entry (`virtual:vinext-rsc-entry`) is the request handler for all App Router requests. It runs in the `rsc` Vite environment with the `react-server` import condition.
+
+### Request Handler Export
+
+From `packages/vinext/src/server/app-dev-server.ts`:
+
+```typescript
+export default async function handler(request) {
+  // Wrap in AsyncLocalStorage context
+  const headersCtx = headersContextFromRequest(request);
+  return runWithHeadersContext(headersCtx, async () => {
+    _initRequestScopedCacheState();
+    _clearPrivateCache();
+    return runWithFetchCache(async () => {
+      const response = await _handleRequest(request);
+      // Apply custom headers from next.config.js
+      if (__configHeaders.length && response?.headers) {
+        const extraHeaders = __applyConfigHeaders(pathname);
+        for (const h of extraHeaders) {
+          response.headers.set(h.key, h.value);
+        }
+      }
+      return response;
+    });
+  });
+}
+```
+
+**Key patterns:**
+- All async context uses `AsyncLocalStorage.run()` for proper isolation
+- Headers and cookies are available via `headers()` and `cookies()` throughout the tree
+- Per-request cache state is initialized once
+- Fetch cache tracks tags for revalidation
+
+### Request Lifecycle
+
+The `_handleRequest` function implements the full request lifecycle:
+
+1. **Protocol-relative URL guard** - Reject paths starting with `//`
+2. **Base path stripping** - Remove `basePath` prefix if configured
+3. **Trailing slash normalization** - Redirect to canonical form
+4. **Config redirects** - Apply `redirects` from next.config.js
+5. **beforeFiles rewrites** - Apply before file-system routing
+6. **Middleware execution** - Run middleware.ts if path matches
+7. **Image optimization** - Handle `/_vinext/image` endpoint
+8. **Metadata routes** - Serve sitemap.xml, robots.txt, manifest.json
+9. **Server actions** - Handle POST requests with `x-rsc-action` header
+10. **afterFiles rewrites** - Apply after file-system routing
+11. **Route matching** - Find matching App Router route
+12. **fallback rewrites** - Apply if no route matched
+13. **Route handler execution** - Run route.ts if present
+14. **Page rendering** - Build component tree and render to RSC stream
+15. **SSR delegation** - Pass RSC stream to SSR entry for HTML generation
+
+## Component Tree Rendering
+
+### Metadata Resolution
+
+Metadata and viewport are resolved from layouts and pages before rendering:
+
+```typescript
+const metadataList = [];
+const viewportList = [];
+
+// Collect from layouts (root to leaf)
+for (const layoutMod of route.layouts) {
+  if (layoutMod) {
+    const meta = await resolveModuleMetadata(layoutMod, params);
+    if (meta) metadataList.push(meta);
+    const vp = await resolveModuleViewport(layoutMod, params);
+    if (vp) viewportList.push(vp);
+  }
+}
+
+// Collect from page
+if (route.page) {
+  const pageMeta = await resolveModuleMetadata(route.page, params);
+  if (pageMeta) metadataList.push(pageMeta);
+  const pageVp = await resolveModuleViewport(route.page, params);
+  if (pageVp) viewportList.push(pageVp);
+}
+
+const resolvedMetadata = metadataList.length > 0 
+  ? mergeMetadata(metadataList) 
+  : null;
+const resolvedViewport = viewportList.length > 0 
+  ? mergeViewport(viewportList) 
+  : null;
+```
+
+`resolveModuleMetadata()` handles both static exports and `generateMetadata()` functions:
+
+```typescript
+export async function resolveModuleMetadata(
+  module: any,
+  params?: Record<string, unknown>
+): Promise<Metadata | null> {
+  // Static export
+  if (module.metadata && typeof module.metadata === "object") {
+    return module.metadata;
+  }
+  
+  // generateMetadata function
+  if (typeof module.generateMetadata === "function") {
+    const asyncParams = Object.assign(Promise.resolve(params || {}), params || {});
+    return await module.generateMetadata({ params: asyncParams });
+  }
+  
+  return null;
+}
+```
+
+### Thenable Params
+
+Next.js 15+ changed `params` and `searchParams` to Promises. Vinext creates "thenable objects" for backward compatibility:
+
+```typescript
+// Works both as Promise (new style) and object (old style)
+const asyncParams = Object.assign(Promise.resolve(params), params);
+const pageProps = { params: asyncParams };
+
+// New style (Next.js 15+):
+const { id } = await params;
+
+// Old style (pre-15):
+const { id } = params;
+```
+
+This pattern is applied to:
+- Page component props
+- Layout component props
+- `generateMetadata()` arguments
+- `generateViewport()` arguments
+
+### Boundary Components
+
+Vinext wraps the component tree with error, loading, and not-found boundaries:
+
+**Loading Boundary:**
+```typescript
+if (route.loading?.default) {
+  element = createElement(
+    Suspense,
+    { fallback: createElement(route.loading.default) },
+    element,
+  );
+}
+```
+
+**Error Boundary:**
+```typescript
+if (route.error?.default) {
+  element = createElement(ErrorBoundary, {
+    fallback: route.error.default,
+    children: element,
+  });
+}
+```
+
+**NotFound Boundary:**
+```typescript
+const NotFoundComponent = route.notFound?.default;
+if (NotFoundComponent) {
+  element = createElement(NotFoundBoundary, {
+    fallback: createElement(NotFoundComponent),
+    children: element,
+  });
+}
+```
+
+Boundaries are **interleaved with layouts** so errors propagate correctly:
+
+```typescript
+for (let i = route.layouts.length - 1; i >= 0; i--) {
+  // Per-layout error boundary BEFORE layout
+  if (route.errors && route.errors[i]?.default) {
+    element = createElement(ErrorBoundary, {
+      fallback: route.errors[i].default,
+      children: element,
+    });
+  }
+
+  const LayoutComponent = route.layouts[i]?.default;
+  if (LayoutComponent) {
+    // Per-layout NotFoundBoundary
+    const LayoutNotFound = route.notFounds?.[i]?.default;
+    if (LayoutNotFound) {
+      element = createElement(NotFoundBoundary, {
+        fallback: createElement(LayoutNotFound),
+        children: element,
+      });
+    }
+    
+    element = createElement(LayoutComponent, { children: element, params });
+  }
+}
+```
+
+This ensures errors from Layout N are caught by the boundary at Layout N-1.
+
+## Server Actions
+
+Server actions are POST requests with the `x-rsc-action` header:
+
+### CSRF Protection
+
+Vinext implements the same CSRF protection as Next.js:
+
+```typescript
+function __validateCsrfOrigin(request) {
+  const originHeader = request.headers.get("origin");
+  if (!originHeader || originHeader === "null") return null;
+
+  let originHost;
+  try {
+    originHost = new URL(originHeader).host.toLowerCase();
+  } catch {
+    return new Response("Forbidden", { status: 403 });
+  }
+
+  const hostHeader = (
+    request.headers.get("x-forwarded-host") ||
+    request.headers.get("host") ||
+    ""
+  ).split(",")[0].trim().toLowerCase();
+
+  // Same origin - allow
+  if (originHost === hostHeader) return null;
+
+  // Check allowedOrigins from next.config.js
+  if (__allowedOrigins.length > 0 && __isOriginAllowed(originHost, __allowedOrigins)) {
+    return null;
+  }
+
+  return new Response("Forbidden", { status: 403 });
+}
+```
+
+### Action Execution
+
+```typescript
+if (request.method === "POST" && actionId) {
+  const csrfResponse = __validateCsrfOrigin(request);
+  if (csrfResponse) return csrfResponse;
+
+  const contentType = request.headers.get("content-type") || "";
+  const body = contentType.startsWith("multipart/form-data")
+    ? await request.formData()
+    : await request.text();
+
+  const temporaryReferences = createTemporaryReferenceSet();
+  const args = await decodeReply(body, { temporaryReferences });
+  const action = await loadServerAction(actionId);
+
+  let returnValue;
+  try {
+    const data = await action.apply(null, args);
+    returnValue = { ok: true, data };
+  } catch (e) {
+    // Detect redirect() thrown inside action
+    if (e?.digest?.startsWith("NEXT_REDIRECT;")) {
+      const parts = e.digest.split(";");
+      actionRedirect = {
+        url: parts[2],
+        type: parts[1] || "replace",
+        status: parts[3] ? parseInt(parts[3], 10) : 307,
+      };
+      returnValue = { ok: true, data: undefined };
+    } else {
+      returnValue = { ok: false, data: e };
+    }
+  }
+
+  // Re-render page after action
+  const element = buildPageElement(route, params, undefined, url.searchParams);
+  const rscStream = renderToReadableStream(
+    { root: element, returnValue },
+    { temporaryReferences, onError: rscOnError },
+  );
+
+  return new Response(rscStream, { 
+    headers: { "Content-Type": "text/x-component; charset=utf-8" } 
+  });
+}
+```
+
+**Key details:**
+- Actions support both FormData and text bodies
+- Temporary references enable streaming large payloads
+- `redirect()` in actions is detected via digest
+- Page is re-rendered after mutation to reflect changes
+- Cookies set during action are attached to response
+
+## SSR Delegation
+
+After rendering the RSC stream, the RSC entry delegates to the SSR entry for HTML generation:
+
+```typescript
+const rscStream = renderToReadableStream(element, { onError: rscOnError });
+
+// Collect font data from RSC environment
+const fontData = {
+  links: _getSSRFontLinks(),
+  styles: _getSSRFontStyles(),
+  preloads: _getSSRFontPreloads(),
+};
+
+// Load SSR entry from separate environment
+const ssrEntry = await import.meta.viteRsc.loadModule("ssr", "index");
+
+// Pass RSC stream, navigation context, and font data
+const htmlStream = await ssrEntry.handleSsr(
+  rscStream,
+  _getNavigationContext(),
+  fontData
+);
+
+setHeadersContext(null);
+setNavigationContext(null);
+
+const respHeaders = { "Content-Type": "text/html; charset=utf-8" };
+const linkParts = (fontData.preloads || []).map(
+  p => `<${p.href}>; rel=preload; as=font; type=${p.type}; crossorigin`
+);
+if (linkParts.length > 0) respHeaders["Link"] = linkParts.join(", ");
+
+return new Response(htmlStream, { headers: respHeaders });
+```
+
+**Why pass navigation context explicitly?**
+
+The RSC and SSR environments have separate module instances. Setting `setNavigationContext()` in the RSC environment doesn't affect the SSR environment.
+
+Client components rendered during SSR need pathname/searchParams/params. The SSR entry receives the context and calls its own `setNavigationContext()` before rendering.
+
+## Route Handlers
+
+Route handlers (route.ts) are special-cased:
+
+```typescript
+if (route.routeHandler) {
+  const handler = route.routeHandler;
+  const method = request.method.toUpperCase();
+
+  // Collect exported HTTP methods
+  const HTTP_METHODS = ["GET", "HEAD", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"];
+  const exportedMethods = HTTP_METHODS.filter(m => typeof handler[m] === "function");
+  if (exportedMethods.includes("GET") && !exportedMethods.includes("HEAD")) {
+    exportedMethods.push("HEAD");
+  }
+
+  // Auto-implement OPTIONS
+  if (method === "OPTIONS" && typeof handler["OPTIONS"] !== "function") {
+    return new Response(null, {
+      status: 204,
+      headers: { "Allow": exportedMethods.join(", ") },
+    });
+  }
+
+  // Auto-implement HEAD (run GET and strip body)
+  let handlerFn = handler[method] || handler["default"];
+  let isAutoHead = false;
+  if (method === "HEAD" && typeof handler["HEAD"] !== "function" && typeof handler["GET"] === "function") {
+    handlerFn = handler["GET"];
+    isAutoHead = true;
+  }
+
+  if (typeof handlerFn === "function") {
+    const response = await handlerFn(request, { params });
+
+    // Attach pending cookies
+    const pendingCookies = getAndClearPendingCookies();
+    if (pendingCookies.length > 0) {
+      const newHeaders = new Headers(response.headers);
+      for (const cookie of pendingCookies) {
+        newHeaders.append("Set-Cookie", cookie);
+      }
+      return new Response(
+        isAutoHead ? null : response.body,
+        { status: response.status, headers: newHeaders }
+      );
+    }
+
+    return isAutoHead
+      ? new Response(null, { status: response.status, headers: response.headers })
+      : response;
+  }
+}
+```
+
+## Error Handling
+
+### RSC onError Callback
+
+Vinext provides an `onError` callback to preserve digests for navigation errors:
+
+```typescript
+function rscOnError(error) {
+  if (error && typeof error === "object" && "digest" in error) {
+    return String(error.digest);
+  }
+  return undefined;
+}
+
+const rscStream = renderToReadableStream(element, { onError: rscOnError });
+```
+
+Without this, React's default `onError` returns undefined and the digest is lost. Client-side error boundaries can't identify the error type (redirect, notFound, etc.).
+
+### Error Page Rendering
+
+When a server component throws, Vinext renders the error boundary page:
+
+```typescript
+async function renderErrorBoundaryPage(route, error, isRscRequest, request) {
+  // Resolve error boundary component (leaf → per-layout → global-error)
+  let ErrorComponent = route?.error?.default ?? null;
+  if (!ErrorComponent && route?.errors) {
+    for (let i = route.errors.length - 1; i >= 0; i--) {
+      if (route.errors[i]?.default) {
+        ErrorComponent = route.errors[i].default;
+        break;
+      }
+    }
+  }
+  ErrorComponent = ErrorComponent ?? globalErrorModule?.default;
+  if (!ErrorComponent) return null;
+
+  const errorObj = error instanceof Error ? error : new Error(String(error));
+  let element = createElement(ErrorComponent, { error: errorObj });
+
+  // Wrap with layouts (for RSC requests, also wrap with LayoutSegmentProvider)
+  const layouts = route?.layouts ?? rootLayouts;
+  for (let i = layouts.length - 1; i >= 0; i--) {
+    const LayoutComponent = layouts[i]?.default;
+    if (LayoutComponent) {
+      element = createElement(LayoutComponent, { children: element });
+      if (isRscRequest) {
+        const layoutDepth = route?.layoutSegmentDepths?.[i] ?? 0;
+        element = createElement(LayoutSegmentProvider, { depth: layoutDepth }, element);
+      }
+    }
+  }
+
+  const rscStream = renderToReadableStream(element, { onError: rscOnError });
+  // ... (delegate to SSR or return RSC stream)
+}
+```
+
+**Important:** Next.js returns HTTP 200 when error.tsx catches an error (the error is "handled" by the boundary). Vinext matches this behavior.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Architecture Deep Dive" icon="sitemap" href="/advanced/architecture-deep-dive">
+    Core architecture and design patterns
+  </Card>
+  <Card title="Build Pipeline" icon="hammer" href="/advanced/build-pipeline">
+    Production build pipeline details
+  </Card>
+  <Card title="Virtual Modules" icon="cube" href="/advanced/virtual-modules">
+    Virtual module system and generation
+  </Card>
+</CardGroup>

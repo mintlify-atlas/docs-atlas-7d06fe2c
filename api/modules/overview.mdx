@@ -1,0 +1,135 @@
+---
+title: Module Shims Overview
+description: Next.js API compatibility layer for Vite
+---
+
+vinext reimplements the Next.js module API surface using Vite, allowing you to use standard `next/*` imports with full compatibility.
+
+## Available Modules
+
+All `next/*` imports are automatically shimmed by vinext:
+
+| Module | Description | Router Support |
+|--------|-------------|----------------|
+| [next/link](/api/modules/link) | Client-side navigation with prefetching | App + Pages |
+| [next/image](/api/modules/image) | Optimized image component | App + Pages |
+| [next/navigation](/api/modules/navigation) | App Router navigation hooks | App Router |
+| [next/router](/api/modules/router) | Pages Router navigation | Pages Router |
+| [next/server](/api/modules/server) | Server-side request/response utilities | App + Pages |
+| [next/headers](/api/modules/headers) | Server Component header access | App Router |
+| [next/cache](/api/modules/cache) | Caching and revalidation | App Router |
+| [next/dynamic](/api/modules/dynamic) | Code splitting and lazy loading | App + Pages |
+| [next/script](/api/modules/script) | Third-party script loading | App + Pages |
+| [next/font](/api/modules/font) | Google and local font optimization | App + Pages |
+
+## How It Works
+
+vinext's Vite plugin intercepts `next/*` imports and resolves them to shim implementations:
+
+```typescript
+// Your import
+import Link from 'next/link'
+import { cookies } from 'next/headers'
+
+// Resolved by vinext plugin to:
+import Link from 'vinext/shims/link'
+import { cookies } from 'vinext/shims/headers'
+```
+
+The shims provide API-compatible implementations that work with:
+- **Vite's module system** (ESM, HMR, multi-environment builds)
+- **Standard Web APIs** (Request, Response, Headers)
+- **Multiple runtimes** (Node.js, Cloudflare Workers, Deno)
+
+## Compatibility Notes
+
+### Full Compatibility
+
+Most Next.js APIs work identically:
+
+- All navigation APIs (`useRouter`, `usePathname`, `Link`)
+- Server Components APIs (`headers`, `cookies`, `notFound`)
+- Middleware (`NextRequest`, `NextResponse`)
+- Image optimization and lazy loading
+- Font optimization (Google Fonts and local)
+
+### Runtime Differences
+
+<Accordion title="AsyncLocalStorage Availability">
+vinext uses `AsyncLocalStorage` for request context isolation. This works in:
+- Node.js 16+ (native)
+- Cloudflare Workers (via polyfill)
+- Deno (native)
+
+In environments without ALS support, a fallback to module-level state is used (not concurrency-safe).
+</Accordion>
+
+<Accordion title="Image Optimization">
+Local image optimization routes through `/_vinext/image`:
+- **Dev mode**: Serves original files
+- **Cloudflare Workers**: Uses Cloudflare Images binding
+- **Custom backends**: Implement your own handler
+
+Remote images use `@unpic/react` for CDN-native transforms.
+</Accordion>
+
+<Accordion title="Font Loading">
+Google Fonts:
+- **Dev**: Loads from Google Fonts CDN
+- **Production**: Self-hosted via build-time fetch (no runtime requests)
+
+Local fonts are bundled as assets and served with proper caching headers.
+</Accordion>
+
+## Extension Points
+
+### Custom Cache Handler
+
+Swap the cache backend for Redis, DynamoDB, etc:
+
+```typescript
+import { setCacheHandler } from 'next/cache'
+import { MyCacheHandler } from './cache'
+
+setCacheHandler(new MyCacheHandler())
+```
+
+### Image Optimization Handler
+
+Intercept `/_vinext/image` requests in your server:
+
+```typescript
+if (pathname === '/_vinext/image') {
+  const url = searchParams.get('url')
+  const width = Number(searchParams.get('w'))
+  return optimizeImage(url, width)
+}
+```
+
+### Middleware Context
+
+Access platform-specific context in middleware:
+
+```typescript
+export function middleware(request: NextRequest) {
+  // Cloudflare Workers
+  const cf = request.cf
+  
+  // Custom context
+  const ctx = (request as any).__vinext_context
+  
+  return NextResponse.next()
+}
+```
+
+## Type Safety
+
+All shims are fully typed with TypeScript:
+
+```typescript
+import type { Metadata } from 'next'
+import type { NextRequest, NextResponse } from 'next/server'
+import type { ReadonlyURLSearchParams } from 'next/navigation'
+```
+
+Types are compatible with `@types/react` and the Next.js type definitions.

@@ -1,0 +1,449 @@
+---
+title: Architecture Deep Dive
+description: Internal architecture and design decisions in Vinext
+---
+
+# Architecture Deep Dive
+
+Vinext is a Vite plugin that reimplements the Next.js API surface on top of Vite's infrastructure, with Cloudflare Workers as the primary deployment target. This guide explains the architectural decisions, implementation patterns, and internal mechanics.
+
+## Core Architecture
+
+### Plugin Architecture
+
+Vinext is implemented as a standard Vite plugin that hooks into Vite's lifecycle:
+
+1. **Resolves all `next/*` imports** to local shim modules
+2. **Scans `pages/` and `app/` directories** to build file-system routes
+3. **Generates virtual entry modules** for RSC, SSR, and browser environments
+4. **Integrates with `@vitejs/plugin-rsc`** for React Server Components
+
+From `packages/vinext/src/index.ts`:
+
+```typescript
+export default function vinext(options: VinextOptions = {}): Plugin[] {
+  let root: string;
+  let pagesDir: string;
+  let appDir: string;
+  let hasAppDir = false;
+  let hasPagesDir = false;
+  let nextConfig: ResolvedNextConfig;
+  let middlewarePath: string | null = null;
+  
+  // Shim alias map for resolving next/* imports
+  let nextShimMap: Record<string, string> = {};
+  
+  // ...
+}
+```
+
+### Separation of Concerns
+
+**What `@vitejs/plugin-rsc` handles:**
+- Bundler transforms for `"use client"` / `"use server"` directives
+- RSC stream serialization (wraps `react-server-dom-webpack`)
+- Multi-environment builds (RSC/SSR/Client)
+- CSS code-splitting and auto-injection
+- HMR for server components
+- Bootstrap script injection for client hydration
+
+**What Vinext handles:**
+- File-system routing (scanning `app/` and `pages/` directories)
+- Request lifecycle (middleware, headers, redirects, rewrites, route handling)
+- Layout nesting and React tree construction
+- Client-side navigation and prefetching
+- Caching (ISR, `"use cache"`, fetch cache)
+- All `next/*` module shims
+
+### Request Flow
+
+#### Pages Router Flow
+
+```
+Request → Vite dev server middleware → Route match → getServerSideProps/getStaticProps
+  → renderToReadableStream(App + Page) → HTML with __NEXT_DATA__ → Client hydration
+```
+
+#### App Router Flow
+
+```
+Request → RSC entry (Vite rsc environment) → Route match → Build layout/page tree
+  → renderToReadableStream (RSC payload) → SSR entry (Vite ssr environment)
+  → renderToReadableStream (HTML) → Client hydration from RSC stream
+```
+
+## Multi-Environment Architecture
+
+### The RSC/SSR Environment Boundary
+
+<Warning>
+  This is the **single most important architectural detail**. Understanding this prevents the most common bugs.
+</Warning>
+
+The RSC environment and SSR environment are **separate Vite module graphs with separate module instances**.
+
+If you set state in a module in the RSC environment (e.g., `setNavigationContext()` in `next/navigation`), the SSR environment's copy of that module is unaffected.
+
+**Rule of thumb:** Any per-request state that `"use client"` components need during SSR must be **explicitly passed** from the RSC entry to the SSR entry via the `handleSsr(rscStream, navContext)` call.
+
+From `packages/vinext/src/server/app-dev-server.ts`:
+
+```typescript
+// RSC environment: Set navigation context
+setNavigationContext({
+  pathname: cleanPathname,
+  searchParams: url.searchParams,
+  params: {},
+});
+
+// Build RSC stream
+const rscStream = renderToReadableStream(element, { onError: rscOnError });
+
+// Collect font data from RSC environment
+const fontData = {
+  links: _getSSRFontLinks(),
+  styles: _getSSRFontStyles(),
+  preloads: _getSSRFontPreloads(),
+};
+
+// Delegate to SSR environment with context
+const ssrEntry = await import.meta.viteRsc.loadModule("ssr", "index");
+const htmlStream = await ssrEntry.handleSsr(
+  rscStream, 
+  _getNavigationContext(), // Explicitly pass context
+  fontData
+);
+```
+
+The SSR entry receives this context and calls the setter in its own module instance before rendering client components.
+
+### Why This Architecture?
+
+React Server Components require two separate render passes:
+
+1. **RSC pass** (server-only): Renders server components to an RSC stream
+2. **SSR pass** (client components): Hydrates client components from the RSC stream to HTML
+
+Vite's multi-environment system gives each pass its own module graph with the correct import conditions:
+- RSC environment uses `react-server` condition
+- SSR environment uses `node` condition
+- Client environment uses `browser` condition
+
+This prevents mixing incompatible APIs (e.g., server-only code leaking to the client).
+
+## Virtual Module System
+
+### Virtual Module Resolution
+
+Vinext generates several virtual modules that serve as entry points:
+
+**Pages Router:**
+- `virtual:vinext-server-entry` - SSR server entry
+- `virtual:vinext-client-entry` - Client hydration entry
+
+**App Router:**
+- `virtual:vinext-rsc-entry` - RSC request handler
+- `virtual:vinext-app-ssr-entry` - SSR entry
+- `virtual:vinext-app-browser-entry` - Client hydration entry
+
+### Resolution Quirks
+
+<Warning>
+Virtual modules have no real file location, so all imports within them must use **absolute paths**.
+</Warning>
+
+**Build-time root prefix:**
+Vite prefixes virtual module IDs with the project root path when resolving SSR build entries. The `resolveId` hook must handle both:
+- `virtual:vinext-server-entry`
+- `<root>/virtual:vinext-server-entry`
+
+**`\0` prefix in client environment:**
+When the RSC plugin generates its browser entry, it imports virtual modules using the already-resolved `\0`-prefixed ID. Vite's `import-analysis` plugin can't resolve this. Fix: strip the `\0` prefix before matching.
+
+From `packages/vinext/src/index.ts`:
+
+```typescript
+const VIRTUAL_RSC_ENTRY = "virtual:vinext-rsc-entry";
+const RESOLVED_RSC_ENTRY = "\0" + VIRTUAL_RSC_ENTRY;
+
+// In resolveId hook:
+resolveId(id) {
+  // Handle both prefixed and unprefixed
+  const normalized = id.replace(/^\0/, "").replace(root + "/", "");
+  if (normalized === VIRTUAL_RSC_ENTRY) return RESOLVED_RSC_ENTRY;
+  // ...
+}
+```
+
+## File-System Routing
+
+### App Router Route Discovery
+
+The App Router scanner (`packages/vinext/src/routing/app-router.ts`) walks the `app/` directory to build route metadata:
+
+```typescript
+export interface AppRoute {
+  pattern: string;                // URL pattern: "/" or "/blog/:slug"
+  pagePath: string | null;        // Absolute path to page component
+  routePath: string | null;       // Absolute path to route handler
+  layouts: string[];              // Root-to-leaf layout chain
+  templates: string[];            // Parallel to layouts
+  parallelSlots: ParallelSlot[];  // @slot directories
+  loadingPath: string | null;
+  errorPath: string | null;
+  layoutErrorPaths: (string | null)[];
+  notFoundPath: string | null;
+  notFoundPaths: (string | null)[];
+  forbiddenPath: string | null;
+  unauthorizedPath: string | null;
+  layoutSegmentDepths: number[];  // For useSelectedLayoutSegments()
+  isDynamic: boolean;
+  params: string[];
+}
+```
+
+**Key features:**
+- Route groups `(group)` are transparent (don't affect URL)
+- Parallel routes `@slot` are discovered and tracked
+- Intercepting routes `(.)`/`(..)`/`(...)`  are mapped to target patterns
+- Layout nesting is computed from file structure
+- Segment depths are calculated for hook support
+
+### Metadata Collection
+
+Each route tracks **per-layout error boundaries** and **not-found pages**:
+
+```typescript
+// layoutErrorPaths: aligned with layouts array
+// Each entry is the error.tsx at that layout's directory
+layoutErrorPaths: (string | null)[];
+
+// notFoundPaths: per-layout not-found boundaries
+notFoundPaths: (string | null)[];
+```
+
+This enables proper error boundary nesting: errors from layout N are caught by the boundary at layout N-1, matching Next.js behavior.
+
+## Component Tree Construction
+
+### Layout Wrapping
+
+The RSC entry builds the component tree by wrapping the page with layouts (innermost to outermost):
+
+From `packages/vinext/src/server/app-dev-server.ts`:
+
+```typescript
+async function buildPageElement(route, params, opts, searchParams) {
+  const PageComponent = route.page?.default;
+  let element = createElement(PageComponent, { params, searchParams });
+
+  // Add metadata + viewport head tags
+  const headElements = [
+    createElement("meta", { charSet: "utf-8" }),
+    createElement(MetadataHead, { metadata: resolvedMetadata }),
+    createElement(ViewportHead, { viewport: effectiveViewport }),
+  ];
+  element = createElement(Fragment, null, ...headElements, element);
+
+  // Wrap with loading.tsx Suspense
+  if (route.loading?.default) {
+    element = createElement(
+      Suspense,
+      { fallback: createElement(route.loading.default) },
+      element,
+    );
+  }
+
+  // Wrap with error boundary
+  if (route.error?.default) {
+    element = createElement(ErrorBoundary, {
+      fallback: route.error.default,
+      children: element,
+    });
+  }
+
+  // Wrap with NotFoundBoundary
+  const NotFoundComponent = route.notFound?.default;
+  if (NotFoundComponent) {
+    element = createElement(NotFoundBoundary, {
+      fallback: createElement(NotFoundComponent),
+      children: element,
+    });
+  }
+
+  // Wrap with templates (innermost first)
+  for (let i = route.templates.length - 1; i >= 0; i--) {
+    const TemplateComponent = route.templates[i]?.default;
+    if (TemplateComponent) {
+      element = createElement(TemplateComponent, { children: element, params });
+    }
+  }
+
+  // Wrap with layouts (innermost first)
+  for (let i = route.layouts.length - 1; i >= 0; i--) {
+    // Per-layout error boundary first
+    if (route.errors && route.errors[i]?.default) {
+      element = createElement(ErrorBoundary, {
+        fallback: route.errors[i].default,
+        children: element,
+      });
+    }
+
+    const LayoutComponent = route.layouts[i]?.default;
+    if (LayoutComponent) {
+      // Per-layout NotFoundBoundary
+      const LayoutNotFound = route.notFounds?.[i]?.default;
+      if (LayoutNotFound) {
+        element = createElement(NotFoundBoundary, {
+          fallback: createElement(LayoutNotFound),
+          children: element,
+        });
+      }
+
+      const layoutProps = { children: element, params };
+      
+      // Add parallel slots to the layout that defines them
+      if (route.slots) {
+        for (const [slotName, slotMod] of Object.entries(route.slots)) {
+          const targetIdx = slotMod.layoutIndex >= 0 
+            ? slotMod.layoutIndex 
+            : route.layouts.length - 1;
+          if (i === targetIdx) {
+            const SlotPage = slotMod.page?.default;
+            if (SlotPage) {
+              layoutProps[slotName] = createElement(SlotPage, { params });
+            }
+          }
+        }
+      }
+
+      element = createElement(LayoutComponent, layoutProps);
+
+      // Wrap with LayoutSegmentProvider for useSelectedLayoutSegments()
+      const layoutDepth = route.layoutSegmentDepths[i];
+      element = createElement(LayoutSegmentProvider, { depth: layoutDepth }, element);
+    }
+  }
+
+  // Global error boundary
+  const GlobalErrorComponent = globalErrorModule?.default;
+  if (GlobalErrorComponent) {
+    element = createElement(ErrorBoundary, {
+      fallback: GlobalErrorComponent,
+      children: element,
+    });
+  }
+
+  return element;
+}
+```
+
+### Parallel Slots
+
+Parallel slots (`@slot` directories) are passed as named props to the layout at their directory level:
+
+```typescript
+const layoutProps = { 
+  children: element, 
+  params,
+  // Slots added dynamically:
+  team: <TeamSlot />,
+  analytics: <AnalyticsSlot />,
+};
+
+element = createElement(LayoutComponent, layoutProps);
+```
+
+## Production Builds
+
+### Multi-Environment Build Pipeline
+
+<Warning>
+You **must** use `createBuilder()` + `builder.buildApp()` for production builds, not `build()` directly.
+</Warning>
+
+Calling `build()` from the Vite JS API doesn't trigger the RSC plugin's multi-environment build pipeline.
+
+The build sequence:
+
+1. **RSC environment build** - Server components bundle
+2. **SSR environment build** - SSR runtime bundle  
+3. **Client environment build** - Browser bundle with code splitting
+4. **Manifest generation** - Maps modules to chunks
+5. **Asset optimization** - CSS extraction, minification
+
+### Code Splitting Strategy
+
+Vinext uses a conservative code-splitting strategy optimized for real-world performance:
+
+From `packages/vinext/src/index.ts`:
+
+```typescript
+function clientManualChunks(id: string): string | undefined {
+  if (id.includes("node_modules")) {
+    const pkg = getPackageName(id);
+    if (
+      pkg === "react" ||
+      pkg === "react-dom" ||
+      pkg === "scheduler"
+    ) {
+      return "framework"; // Always-loaded shared chunk
+    }
+    // Let Rollup handle all other vendor code via its default
+    // graph-based splitting (typically 5-15 shared chunks)
+    return undefined;
+  }
+
+  // Vinext shims - small runtime, shared across all pages
+  if (id.startsWith(shimsDir)) {
+    return "vinext";
+  }
+
+  return undefined;
+}
+
+const clientOutputConfig = {
+  manualChunks: clientManualChunks,
+  experimentalMinChunkSize: 10_000, // Merge tiny chunks
+};
+```
+
+**Why not per-package splitting?**
+- Per-package splitting creates 50-200+ chunks (exceeds HTTP/2 sweet spot of ~25 requests)
+- Small files compress poorly (gzip/brotli restart with empty dictionary)
+- ES module evaluation has per-module overhead
+- Rollup's graph-based splitting already handles shared dependencies well
+
+### Treeshaking Configuration
+
+Vinext uses aggressive treeshaking for vendor packages:
+
+```typescript
+const clientTreeshakeConfig = {
+  preset: "recommended" as const,
+  moduleSideEffects: "no-external" as const,
+};
+```
+
+The `"no-external"` setting means:
+- **Local project modules**: preserve side effects (CSS imports, polyfills)
+- **node_modules packages**: treat as side-effect-free unless exports are used
+
+This is critical for large barrel-exporting libraries (mermaid, @mui/material, lucide-react) that re-export hundreds of sub-modules.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="RSC Integration" icon="server" href="/advanced/rsc-integration">
+    Deep dive into React Server Components integration
+  </Card>
+  <Card title="Build Pipeline" icon="hammer" href="/advanced/build-pipeline">
+    Production build pipeline and optimization
+  </Card>
+  <Card title="Virtual Modules" icon="cube" href="/advanced/virtual-modules">
+    Virtual module system and entry generation
+  </Card>
+  <Card title="API Reference" icon="book" href="/api/cli/overview">
+    Complete API documentation
+  </Card>
+</CardGroup>

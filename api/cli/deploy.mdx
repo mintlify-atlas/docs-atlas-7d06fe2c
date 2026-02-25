@@ -1,0 +1,715 @@
+---
+title: vinext deploy
+description: One-command deployment to Cloudflare Workers with automatic configuration
+---
+
+Deploys your Next.js application to Cloudflare Workers with automatic configuration generation. Handles App Router and Pages Router projects with zero config required.
+
+## Usage
+
+```bash
+vinext deploy [options]
+```
+
+## Options
+
+<ParamField path="--preview" type="flag">
+  Deploy to a preview environment instead of production.
+  
+  ```bash
+  vinext deploy --preview
+  ```
+  
+  Creates a temporary preview URL for testing before production deployment.
+</ParamField>
+
+<ParamField path="--name" type="string">
+  Custom Worker name. Defaults to project name from `package.json`.
+  
+  ```bash
+  vinext deploy --name my-custom-name
+  ```
+  
+  Worker names must be lowercase alphanumeric with hyphens.
+</ParamField>
+
+<ParamField path="--skip-build" type="flag">
+  Skip the build step and deploy existing `dist/` output.
+  
+  ```bash
+  vinext deploy --skip-build
+  ```
+  
+  Useful when you've already built and want to deploy quickly.
+</ParamField>
+
+<ParamField path="--dry-run" type="flag">
+  Generate config files without building or deploying.
+  
+  ```bash
+  vinext deploy --dry-run
+  ```
+  
+  Shows what files would be created: `wrangler.jsonc`, `worker/index.ts`, `vite.config.ts`.
+</ParamField>
+
+<ParamField path="--help" type="flag">
+  Show help for this command. Can also use `-h`.
+  
+  ```bash
+  vinext deploy --help
+  ```
+</ParamField>
+
+### Experimental: Traffic-aware Pre-Rendering (TPR)
+
+<Warning>
+TPR is experimental and must be explicitly enabled. Requires a custom domain (zone analytics unavailable on `*.workers.dev`) and `CLOUDFLARE_API_TOKEN` with Zone.Analytics read permission.
+</Warning>
+
+<ParamField path="--experimental-tpr" type="flag">
+  Enable Traffic-aware Pre-Rendering using Cloudflare zone analytics.
+  
+  ```bash
+  vinext deploy --experimental-tpr
+  ```
+  
+  Pre-renders hot pages into KV cache during deployment based on actual traffic data.
+</ParamField>
+
+<ParamField path="--tpr-coverage" type="number" default="90">
+  Traffic coverage target percentage (0-100).
+  
+  ```bash
+  vinext deploy --experimental-tpr --tpr-coverage 95
+  ```
+  
+  Pre-renders enough pages to cover 95% of actual traffic.
+</ParamField>
+
+<ParamField path="--tpr-limit" type="number" default="1000">
+  Hard cap on number of pages to pre-render.
+  
+  ```bash
+  vinext deploy --experimental-tpr --tpr-limit 500
+  ```
+  
+  Prevents excessive KV usage on high-traffic sites.
+</ParamField>
+
+<ParamField path="--tpr-window" type="number" default="24">
+  Analytics lookback window in hours.
+  
+  ```bash
+  vinext deploy --experimental-tpr --tpr-window 48
+  ```
+  
+  Uses the last 48 hours of traffic data to determine hot pages.
+</ParamField>
+
+## What It Does
+
+The deploy command automates the entire Cloudflare Workers deployment:
+
+```typescript
+// From deploy.ts:698-784
+export async function deploy(options: DeployOptions): Promise<void> {
+  // 1. Detect project structure (App/Pages Router, ISR usage, etc.)
+  const info = detectProject(root);
+  
+  // 2. Install missing dependencies
+  const missingDeps = getMissingDeps(info);
+  if (missingDeps.length > 0) {
+    installDeps(root, missingDeps);
+  }
+  
+  // 3. Ensure ESM (add "type": "module" to package.json)
+  if (!info.hasTypeModule) {
+    renameCJSConfigs(root);  // Rename next.config.js → next.config.cjs
+    ensureESModule(root);     // Add "type": "module"
+  }
+  
+  // 4. Generate config files if missing
+  const filesToGenerate = getFilesToGenerate(info);
+  writeGeneratedFiles(filesToGenerate);
+  
+  // 5. Build for Cloudflare Workers
+  if (!options.skipBuild) {
+    await runBuild(info);
+  }
+  
+  // 6. Optional: Pre-render hot pages (TPR)
+  if (options.experimentalTPR) {
+    await runTPR({ root, coverage, limit, window });
+  }
+  
+  // 7. Deploy via wrangler
+  const url = runWranglerDeploy(root, options.preview);
+  
+  console.log(`Deployed to: ${url}`);
+}
+```
+
+### 1. Project Detection
+
+Scans your project to determine:
+
+- **Router type**: App Router vs Pages Router
+- **ISR usage**: Detects `export const revalidate` in pages
+- **MDX usage**: Checks for `.mdx` files or `@next/mdx` config
+- **Native modules**: Detects modules that need stubbing (`@resvg/resvg-js`, `satori`, etc.)
+- **Existing config**: Checks for `wrangler.jsonc`, `worker/index.ts`, `vite.config.ts`
+
+### 2. Dependency Installation
+
+Automatically installs required packages if missing:
+
+- `@cloudflare/vite-plugin` (always required)
+- `wrangler` (Cloudflare Workers CLI)
+- `@vitejs/plugin-rsc` (App Router only)
+- `@mdx-js/rollup` (if MDX detected)
+
+```typescript
+// From deploy.ts:547-570
+export function getMissingDeps(info: ProjectInfo): MissingDep[] {
+  const missing: MissingDep[] = [];
+
+  if (!info.hasCloudflarePlugin) {
+    missing.push({ name: "@cloudflare/vite-plugin", version: "latest" });
+  }
+  if (!info.hasWrangler) {
+    missing.push({ name: "wrangler", version: "latest" });
+  }
+  if (info.isAppRouter && !info.hasRscPlugin) {
+    missing.push({ name: "@vitejs/plugin-rsc", version: "latest" });
+  }
+  if (info.hasMDX && !hasMdxRollup) {
+    missing.push({ name: "@mdx-js/rollup", version: "latest" });
+  }
+
+  return missing;
+}
+```
+
+### 3. ESM Configuration
+
+Cloudflare Workers requires ESM. vinext automatically:
+
+1. Renames CJS config files:
+   - `next.config.js` → `next.config.cjs`
+   - `postcss.config.js` → `postcss.config.cjs`
+
+2. Adds `"type": "module"` to `package.json`
+
+### 4. Config File Generation
+
+Generates missing files:
+
+<AccordionGroup>
+  <Accordion title="wrangler.jsonc">
+    Cloudflare Workers configuration:
+    
+    ```json
+    {
+      "$schema": "node_modules/wrangler/config-schema.json",
+      "name": "my-app",
+      "compatibility_date": "2026-02-25",
+      "compatibility_flags": ["nodejs_compat"],
+      "main": "./worker/index.ts",
+      "assets": {
+        "not_found_handling": "none",
+        "binding": "ASSETS"
+      },
+      "images": {
+        "binding": "IMAGES"
+      }
+    }
+    ```
+    
+    If ISR is detected, adds KV namespace:
+    
+    ```json
+    "kv_namespaces": [
+      {
+        "binding": "VINEXT_CACHE",
+        "id": "<your-kv-namespace-id>"
+      }
+    ]
+    ```
+  </Accordion>
+  
+  <Accordion title="worker/index.ts (App Router)">
+    Worker entry for App Router with image optimization:
+    
+    ```typescript
+    import { handleImageOptimization } from "vinext/server/image-optimization";
+    import handler from "vinext/server/app-router-entry";
+    
+    interface Env {
+      ASSETS: Fetcher;
+      IMAGES: {
+        input(stream: ReadableStream): {
+          transform(options: Record<string, unknown>): {
+            output(options: { format: string; quality: number }): Promise<{ response(): Response }>;
+          };
+        };
+      };
+    }
+    
+    export default {
+      async fetch(request: Request, env: Env): Promise<Response> {
+        const url = new URL(request.url);
+    
+        // Image optimization via Cloudflare Images binding
+        if (url.pathname === "/_vinext/image") {
+          return handleImageOptimization(request, {
+            fetchAsset: (path) => env.ASSETS.fetch(new Request(new URL(path, request.url))),
+            transformImage: async (body, { width, format, quality }) => {
+              const result = await env.IMAGES.input(body).transform(width > 0 ? { width } : {}).output({ format, quality });
+              return result.response();
+            },
+          });
+        }
+    
+        // Delegate everything else to vinext
+        return handler.fetch(request);
+      },
+    };
+    ```
+  </Accordion>
+  
+  <Accordion title="worker/index.ts (Pages Router)">
+    Worker entry for Pages Router:
+    
+    ```typescript
+    import { handleImageOptimization } from "vinext/server/image-optimization";
+    
+    // @ts-expect-error — virtual module resolved by vinext at build time
+    import { renderPage, handleApiRoute } from "virtual:vinext-server-entry";
+    
+    interface Env {
+      ASSETS: Fetcher;
+      IMAGES: { /* ... */ };
+    }
+    
+    export default {
+      async fetch(request: Request, env: Env): Promise<Response> {
+        const url = new URL(request.url);
+        const pathname = url.pathname;
+        const urlWithQuery = pathname + url.search;
+    
+        // Block protocol-relative URL open redirect attacks (//evil.com/)
+        if (pathname.startsWith("//")) {
+          return new Response("404 Not Found", { status: 404 });
+        }
+    
+        // Image optimization
+        if (pathname === "/_vinext/image") {
+          return handleImageOptimization(request, { /* ... */ });
+        }
+    
+        // API routes
+        if (pathname.startsWith("/api/") || pathname === "/api") {
+          return await handleApiRoute(request, urlWithQuery);
+        }
+    
+        // Page routes
+        return await renderPage(request, urlWithQuery, null);
+      },
+    };
+    ```
+  </Accordion>
+  
+  <Accordion title="vite.config.ts">
+    Vite configuration with Cloudflare plugin:
+    
+    ```typescript
+    import { defineConfig } from "vite";
+    import vinext from "vinext";
+    import { cloudflare } from "@cloudflare/vite-plugin";
+    
+    export default defineConfig({
+      plugins: [
+        vinext(),
+        cloudflare({
+          viteEnvironment: {
+            name: "rsc",
+            childEnvironments: ["ssr"],
+          },
+        }),
+      ],
+    });
+    ```
+    
+    If native modules are detected, adds stub aliases:
+    
+    ```typescript
+    resolve: {
+      alias: {
+        "@resvg/resvg-js": path.resolve(__dirname, "empty-stub.js"),
+        "satori": path.resolve(__dirname, "empty-stub.js"),
+      },
+    },
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### 5. Build for Workers
+
+Runs the Vite build with Cloudflare-specific configuration:
+
+```typescript
+// From deploy.ts:644-660
+async function runBuild(info: ProjectInfo): Promise<void> {
+  if (info.isAppRouter) {
+    // Multi-environment build for App Router
+    const builder = await createBuilder({ root: info.root });
+    await builder.buildApp();
+  } else {
+    // Single build for Pages Router
+    await build({ root: info.root });
+  }
+}
+```
+
+The `@cloudflare/vite-plugin` handles Worker-specific bundling.
+
+### 6. Deploy via Wrangler
+
+Executes `wrangler deploy` to publish to Cloudflare:
+
+```typescript
+// From deploy.ts:664-694
+function runWranglerDeploy(root: string, preview: boolean): string {
+  const args = preview ? ["deploy", "--env", "preview"] : ["deploy"];
+  const output = execSync(`wrangler ${args.join(" ")}`, {
+    cwd: root,
+    stdio: "pipe",
+    encoding: "utf-8",
+  });
+  
+  // Parse deployed URL from output
+  const urlMatch = output.match(/https:\/\/[^\s]+\.workers\.dev[^\s]*/);
+  return urlMatch ? urlMatch[0] : "(URL not detected)";
+}
+```
+
+## Examples
+
+### First Deployment
+
+Deploy to production:
+
+```bash
+vinext deploy
+```
+
+Output:
+```
+vinext deploy  (Vite 6.0.0)
+
+  Project: my-app
+  Router:  App Router
+  ISR:     none
+
+  Installing: @cloudflare/vite-plugin, wrangler, @vitejs/plugin-rsc
+
+  Created wrangler.jsonc
+  Created worker/index.ts
+  Created vite.config.ts
+  Added "type": "module" to package.json
+
+  Building for Cloudflare Workers...
+
+  ✓ Built RSC environment in 3.2s
+  ✓ Built SSR environment in 2.1s
+  ✓ Built client environment in 4.5s
+
+  Deploying to production...
+  ✓ Published my-app (version_id: abc123)
+
+  ─────────────────────────────────────────
+  Deployed to: https://my-app.example.workers.dev
+  ─────────────────────────────────────────
+```
+
+### Preview Deployment
+
+Deploy to preview environment for testing:
+
+```bash
+vinext deploy --preview
+```
+
+Creates a temporary preview URL: `https://my-app-preview.example.workers.dev`
+
+### Custom Worker Name
+
+Deploy with a custom name:
+
+```bash
+vinext deploy --name my-custom-name
+```
+
+### Dry Run (See What Would Be Generated)
+
+```bash
+vinext deploy --dry-run
+```
+
+Output:
+```
+  Project: my-app
+  Router:  App Router
+  ISR:     none
+
+  Created wrangler.jsonc
+  Created worker/index.ts
+  Created vite.config.ts
+
+  Dry run complete. Files generated but no build or deploy performed.
+```
+
+### Skip Build (Deploy Existing Build)
+
+Useful for quick redeployment:
+
+```bash
+vinext build
+vinext deploy --skip-build
+```
+
+### Traffic-aware Pre-Rendering
+
+Pre-render hot pages based on analytics:
+
+```bash
+vinext deploy --experimental-tpr
+```
+
+With custom coverage target:
+
+```bash
+vinext deploy --experimental-tpr --tpr-coverage 95 --tpr-limit 500
+```
+
+## ISR (Incremental Static Regeneration)
+
+If your app uses ISR, vinext automatically:
+
+1. Detects `export const revalidate` in pages
+2. Adds KV namespace binding to `wrangler.jsonc`
+3. Configures runtime cache handler
+
+```typescript
+// app/blog/[slug]/page.tsx
+export const revalidate = 3600; // Revalidate every hour
+
+export default async function BlogPost({ params }) {
+  const post = await fetchPost(params.slug);
+  return <article>{post.content}</article>;
+}
+```
+
+After deployment, you need to create the KV namespace:
+
+```bash
+wrangler kv:namespace create VINEXT_CACHE
+# ➜  Created namespace "VINEXT_CACHE"
+# ➜  ID: abc123def456
+```
+
+Update `wrangler.jsonc`:
+
+```json
+{
+  "kv_namespaces": [
+    {
+      "binding": "VINEXT_CACHE",
+      "id": "abc123def456"
+    }
+  ]
+}
+```
+
+Redeploy:
+
+```bash
+vinext deploy
+```
+
+## Custom Domains
+
+To use a custom domain:
+
+1. Add your domain in Cloudflare dashboard
+2. Add route to `wrangler.jsonc`:
+
+```json
+{
+  "routes": [
+    {
+      "pattern": "example.com/*",
+      "custom_domain": true
+    }
+  ]
+}
+```
+
+3. Deploy:
+
+```bash
+vinext deploy
+```
+
+## Environment Variables
+
+Set secrets using wrangler:
+
+```bash
+wrangler secret put DATABASE_URL
+# Enter the secret value: postgresql://...
+```
+
+Or bulk upload from `.env.production`:
+
+```bash
+wrangler secret bulk .env.production
+```
+
+Access in your app:
+
+```typescript
+// App Router: route handlers have access to env
+export async function GET(request: Request, { env }) {
+  const dbUrl = env.DATABASE_URL;
+  // ...
+}
+```
+
+## CI/CD Integration
+
+### GitHub Actions
+
+```yaml
+name: Deploy to Cloudflare Workers
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      
+      - run: npm ci
+      
+      - run: npx vinext deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+```
+
+### GitLab CI
+
+```yaml
+deploy:
+  stage: deploy
+  image: node:20
+  script:
+    - npm ci
+    - npx vinext deploy
+  environment:
+    name: production
+    url: https://my-app.example.workers.dev
+  only:
+    - main
+```
+
+## Troubleshooting
+
+### "No wrangler found"
+
+vinext installs wrangler automatically, but if you see this error:
+
+```bash
+npm install -D wrangler
+vinext deploy
+```
+
+### "Invalid Worker name"
+
+Worker names must be lowercase alphanumeric with hyphens:
+
+```bash
+# Invalid
+vinext deploy --name My_App
+
+# Valid
+vinext deploy --name my-app
+```
+
+### Build Fails with Native Module Error
+
+Some native Node.js modules don't work in Workers. vinext automatically stubs common ones:
+
+- `@resvg/resvg-js`
+- `satori`
+- `lightningcss`
+- `@napi-rs/canvas`
+- `sharp`
+
+If you need a stubbed module, create `empty-stub.js`:
+
+```javascript
+export default {};
+```
+
+### Deploy Fails with "Unauthorized"
+
+Set your Cloudflare API token:
+
+```bash
+export CLOUDFLARE_API_TOKEN=your_token_here
+vinext deploy
+```
+
+Get a token from: https://dash.cloudflare.com/profile/api-tokens
+
+Required permissions:
+- Account.Workers Scripts (Edit)
+- Account.Workers KV Storage (Edit, if using ISR)
+
+## Pricing
+
+Cloudflare Workers Free tier:
+- **100,000 requests/day**
+- **10ms CPU time per request**
+- Unlimited bandwidth
+- Unlimited storage (KV: 1GB free)
+
+Paid tier ($5/month):
+- **10 million requests/month** (included)
+- **50ms CPU time per request**
+- $0.50 per million requests after
+- KV: 10GB included
+
+<Note>
+Most Next.js apps stay within the free tier during development and small-scale production use.
+</Note>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Cloudflare Deployment" icon="cloud" href="/guides/cloudflare-workers">
+    Deep dive into Cloudflare Workers deployment
+  </Card>
+  <Card title="check Command" icon="clipboard-check" href="/api/cli/check">
+    Check your project for compatibility
+  </Card>
+</CardGroup>

@@ -1,0 +1,234 @@
+---
+title: Known Limitations
+description: Current limitations and unsupported features in vinext
+---
+
+## Current Limitations
+
+These are known limitations in the current version of vinext. Most are related to build-time optimizations that don't affect runtime behavior.
+
+### Image Optimization
+
+**Image optimization doesn't happen at build time.**
+
+- **Remote images**: Work via [@unpic/react](https://unpic.pics), which auto-detects 28 CDN providers including Cloudinary, Imgix, and Cloudflare Images
+- **Local images**: Routed through a `/_vinext/image` endpoint that can resize and transcode on Cloudflare Workers (via the Images binding) in production
+- **Missing**: Build-time optimization, static image resizing, automatic format conversion during build
+
+```tsx
+import Image from "next/image";
+
+// Remote images work with CDN optimization
+<Image
+  src="https://example.com/photo.jpg"
+  width={800}
+  height={600}
+  alt="Photo"
+/>
+
+// Local images work but without build-time optimization
+import photo from "./photo.jpg";
+<Image src={photo} alt="Photo" />
+```
+
+### Font Loading
+
+**Google Fonts are loaded from the CDN, not self-hosted.**
+
+- Fonts are loaded at runtime via CDN links
+- No `size-adjust` fallback font metrics
+- No build-time subsetting or optimization
+- Local fonts work but `@font-face` CSS is injected at runtime, not extracted at build time
+
+```tsx
+import { Inter } from "next/font/google";
+
+const inter = Inter({ subsets: ["latin"] });
+// Loads from Google Fonts CDN at runtime
+```
+
+### Layout Segment Hooks
+
+**`useSelectedLayoutSegment(s)` derives segments from the pathname rather than being truly layout-aware.**
+
+- Works correctly for most use cases
+- May differ from Next.js in edge cases with parallel routes
+- The hook infers segments from URL structure instead of React component tree position
+
+### Route Segment Config
+
+**`runtime` and `preferredRegion` segment config options are ignored.**
+
+vinext runs in a single environment (Cloudflare Workers), so these configuration options have no effect:
+
+```tsx
+// Parsed but ignored
+export const runtime = "edge";
+export const preferredRegion = "iad1";
+
+// These work correctly
+export const revalidate = 60;
+export const dynamic = "force-static";
+export const dynamicParams = true;
+```
+
+### Node.js Production Server
+
+**The Node.js production server (`vinext start`) works for testing but is less complete than Workers deployment.**
+
+- Cloudflare Workers is the primary deployment target
+- The Node.js server is intended for local testing only
+- Some features may behave differently on Node.js vs Workers
+- For production, use `vinext deploy` to deploy to Cloudflare Workers
+
+### Native Node Modules in Dev Mode
+
+**Native Node modules (sharp, resvg, satori, lightningcss, @napi-rs/canvas) crash Vite's RSC dev environment.**
+
+- Dynamic OG image/icon routes using these modules work in production builds
+- They don't work in dev mode due to Vite's RSC environment limitations
+- These are auto-stubbed during `vinext deploy`
+- Workaround: Test OG images in production build (`vinext build && vinext start`)
+
+## Intentionally Not Supported
+
+These features are intentionally excluded from vinext:
+
+### Vercel-Specific Features
+
+- **`@vercel/og` edge runtime** — Use the standard version instead
+- **Vercel Analytics integration** — Use Cloudflare Analytics or Web Analytics
+- **Vercel KV/Blob/Postgres bindings** — Use Cloudflare equivalents (Workers KV, R2, D1)
+
+```tsx
+// ❌ Don't use Vercel-specific imports
+import { kv } from "@vercel/kv";
+
+// ✅ Use Cloudflare bindings instead
+export default async function handler(request, env) {
+  const value = await env.MY_KV.get("key");
+  return Response.json({ value });
+}
+```
+
+### Deprecated Features
+
+- **AMP** — Deprecated since Next.js 13. `useAmp()` returns `false`
+- **`next export` (legacy)** — Use `output: 'export'` in config instead
+- **Old image component** — Use the modern `next/image` API
+
+### Build Tool Configuration
+
+- **Turbopack/webpack configuration** — vinext runs on Vite. Use Vite plugins instead
+- **webpack loaders** — Use equivalent Vite plugins
+- **Turbopack config** — Use Vite config instead
+
+```ts
+// ❌ webpack config doesn't apply
+module.exports = {
+  webpack: (config) => {
+    // This won't work
+    return config;
+  },
+};
+
+// ✅ Use Vite config instead
+import { defineConfig } from "vite";
+import vinext from "vinext";
+
+export default defineConfig({
+  plugins: [
+    vinext(),
+    // Add Vite plugins here
+  ],
+});
+```
+
+### Testing
+
+- **`next/jest`** — Use Vitest instead, which has better Vite integration
+
+```bash
+# ❌ Don't use next/jest
+npm install --save-dev jest @testing-library/react @testing-library/jest-dom
+
+# ✅ Use Vitest
+npm install --save-dev vitest @testing-library/react @testing-library/dom
+```
+
+### Scaffolding
+
+- **`create-next-app` scaffolding** — Not a goal. Use manual installation or migrate an existing Next.js app
+
+### Bug-for-Bug Parity
+
+**If it's not in the Next.js docs, we probably don't replicate it.**
+
+vinext aims for pragmatic compatibility with documented Next.js behavior, not bug-for-bug parity with undocumented edge cases or Vercel-specific implementation details.
+
+## RSC Module Caching (Dev Mode)
+
+In development, RSC modules may be cached across requests. This can affect patterns that expect fresh data on each render:
+
+```tsx
+// May return cached value in dev mode
+const timestamp = Date.now();
+```
+
+This is a known issue being investigated. Use time-based revalidation or force-dynamic for pages that need fresh data on every request.
+
+## Workarounds
+
+For most limitations, there are practical workarounds:
+
+### Image Optimization
+
+Use a CDN that supports automatic optimization:
+
+```tsx
+// Use Cloudflare Images with automatic optimization
+<Image
+  src="https://imagedelivery.net/YOUR_ACCOUNT_HASH/image-id/public"
+  width={800}
+  height={600}
+  alt="Photo"
+/>
+```
+
+### Font Optimization
+
+Self-host fonts if you need build-time optimization:
+
+```tsx
+import { Inter } from "next/font/local";
+
+const inter = Inter({
+  src: "./fonts/inter-var.woff2",
+  variable: "--font-inter",
+});
+```
+
+### Native Modules in Dev
+
+Test OG images in production builds:
+
+```bash
+vinext build
+vinext start
+# Navigate to /api/og routes
+```
+
+## Reporting Issues
+
+If you encounter a limitation not listed here:
+
+1. Check the [GitHub issues](https://github.com/cloudflare/vinext/issues)
+2. Search the [test tracking document](https://github.com/cloudflare/vinext/blob/main/tests/nextjs-compat/TRACKING.md)
+3. File a new issue with:
+   - What you're trying to do
+   - The error message or unexpected behavior
+   - A minimal reproduction if possible
+
+<Tip>
+  Many issues can be diagnosed by AI agents. Try using Claude Code, Cursor, or OpenCode to trace through the vinext source before filing an issue.
+</Tip>

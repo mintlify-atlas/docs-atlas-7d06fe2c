@@ -1,0 +1,353 @@
+---
+title: next/image
+description: Optimized image component with automatic format negotiation
+---
+
+The `Image` component provides automatic image optimization, responsive sizing, and lazy loading. vinext routes local images through `/_vinext/image` and uses `@unpic/react` for CDN-hosted images.
+
+## Import
+
+```typescript
+import Image from 'next/image'
+import { getImageProps } from 'next/image'
+import type { StaticImageData } from 'next/image'
+```
+
+## Basic Usage
+
+```tsx
+import Image from 'next/image'
+import profilePic from './profile.jpg'
+
+export default function Profile() {
+  return (
+    <>
+      {/* Remote image */}
+      <Image
+        src="https://example.com/photo.jpg"
+        alt="Profile photo"
+        width={500}
+        height={500}
+      />
+      
+      {/* Local import */}
+      <Image
+        src={profilePic}
+        alt="Profile"
+      />
+    </>
+  )
+}
+```
+
+## API Reference
+
+### Props
+
+<ParamField path="src" type="string | StaticImageData" required>
+  Image source URL or imported image.
+  
+  Supports:
+  - Remote URLs (validated against `remotePatterns`)
+  - Local paths (`/images/photo.jpg`)
+  - Static imports (`import img from './img.png'`)
+  
+  ```tsx
+  <Image src="/images/hero.jpg" alt="Hero" width={1920} height={1080} />
+  ```
+</ParamField>
+
+<ParamField path="alt" type="string" required>
+  Alternative text for accessibility.
+  
+  **Required** — omitting this prop will cause a build error.
+  ```tsx
+  <Image src="/photo.jpg" alt="Person at beach" width={800} height={600} />
+  ```
+</ParamField>
+
+<ParamField path="width" type="number">
+  Intrinsic width in pixels.
+  
+  Required unless using `fill` or importing a static image:
+  ```tsx
+  <Image src="/logo.png" alt="Logo" width={200} height={50} />
+  ```
+</ParamField>
+
+<ParamField path="height" type="number">
+  Intrinsic height in pixels.
+  
+  Required unless using `fill` or importing a static image:
+  ```tsx
+  <Image src="/banner.jpg" alt="Banner" width={1200} height={300} />
+  ```
+</ParamField>
+
+<ParamField path="fill" type="boolean" default="false">
+  Fill the parent container (replaces `layout="fill"`).
+  
+  Sets `position: absolute` and sizes to fill the parent:
+  ```tsx
+  <div style={{ position: 'relative', width: '100%', height: '400px' }}>
+    <Image src="/bg.jpg" alt="Background" fill />
+  </div>
+  ```
+</ParamField>
+
+<ParamField path="quality" type="number" default="75">
+  Image quality (1-100).
+  
+  Higher values = better quality, larger file size:
+  ```tsx
+  <Image src="/hero.jpg" alt="Hero" width={1920} height={1080} quality={90} />
+  ```
+</ParamField>
+
+<ParamField path="priority" type="boolean" default="false">
+  Load the image with high priority (disables lazy loading).
+  
+  Use for above-the-fold images:
+  ```tsx
+  <Image src="/hero.jpg" alt="Hero" width={1920} height={1080} priority />
+  ```
+  
+  Sets `loading="eager"` and `fetchpriority="high"`.
+</ParamField>
+
+<ParamField path="placeholder" type="'blur' | 'empty'" default="'empty'">
+  Placeholder shown while the image loads.
+  
+  - `'blur'` — requires `blurDataURL`
+  - `'empty'` — transparent placeholder
+  
+  ```tsx
+  <Image 
+    src="/photo.jpg" 
+    alt="Photo" 
+    width={800} 
+    height={600}
+    placeholder="blur"
+    blurDataURL="data:image/jpeg;base64,..."
+  />
+  ```
+</ParamField>
+
+<ParamField path="blurDataURL" type="string">
+  Data URL for blur placeholder (must start with `data:image/`).
+  
+  Automatically provided by static imports:
+  ```tsx
+  import img from './photo.jpg'
+  // img.blurDataURL is auto-generated
+  
+  <Image src={img} alt="Photo" placeholder="blur" />
+  ```
+</ParamField>
+
+<ParamField path="loader" type="(params) => string">
+  Custom URL builder for CDN transforms.
+  
+  ```tsx
+  const myLoader = ({ src, width, quality }) => {
+    return `https://cdn.example.com/${src}?w=${width}&q=${quality || 75}`
+  }
+  
+  <Image 
+    loader={myLoader}
+    src="photo.jpg"
+    alt="Photo"
+    width={800}
+    height={600}
+  />
+  ```
+</ParamField>
+
+<ParamField path="sizes" type="string">
+  Responsive size hints for the browser.
+  
+  ```tsx
+  <Image 
+    src="/hero.jpg" 
+    alt="Hero" 
+    width={1920} 
+    height={1080}
+    sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
+  />
+  ```
+</ParamField>
+
+<ParamField path="unoptimized" type="boolean" default="false">
+  Skip image optimization (serve original file).
+  
+  ```tsx
+  <Image src="/animation.gif" alt="Animation" width={400} height={300} unoptimized />
+  ```
+</ParamField>
+
+<ParamField path="loading" type="'lazy' | 'eager'" default="'lazy'">
+  Browser loading strategy.
+  
+  Automatically set to `'eager'` when `priority={true}`.
+</ParamField>
+
+### Standard Img Props
+
+All standard `<img>` attributes are supported:
+
+```tsx
+<Image 
+  src="/photo.jpg"
+  alt="Photo"
+  width={800}
+  height={600}
+  className="rounded-lg"
+  style={{ objectFit: 'cover' }}
+  onLoad={(e) => console.log('loaded')}
+  onError={(e) => console.error('error')}
+/>
+```
+
+## Remote Patterns
+
+Configure allowed remote image hosts in `next.config.js`:
+
+```javascript
+module.exports = {
+  images: {
+    remotePatterns: [
+      {
+        protocol: 'https',
+        hostname: 'example.com',
+        pathname: '/images/**',
+      },
+      {
+        protocol: 'https',
+        hostname: '*.cdn.example.com',
+      },
+    ],
+    domains: ['legacy.example.com'], // Legacy format
+  },
+}
+```
+
+Unconfigured remote URLs are:
+- **Dev**: Warning logged, image still loads
+- **Production**: Blocked with error
+
+## Optimization
+
+### Local Images
+
+Routed through `/_vinext/image?url=/path&w=800&q=75`:
+
+- **Dev mode**: Serves original file (passthrough)
+- **Cloudflare Workers**: Uses Cloudflare Images binding for resize/transcode
+- **Custom**: Implement your own handler
+
+### Remote Images (CDN)
+
+Uses `@unpic/react` to generate CDN-specific URLs:
+
+```tsx
+{/* Auto-detects Cloudinary */}
+<Image 
+  src="https://res.cloudinary.com/demo/image/upload/sample.jpg"
+  alt="Photo"
+  width={800}
+  height={600}
+/>
+{/* Generates: .../w_800,q_75/sample.jpg */}
+```
+
+Supported CDNs: Cloudinary, imgix, Cloudflare Images, Vercel, and more.
+
+## Responsive Images
+
+Generates `srcset` with standard breakpoints:
+
+```tsx
+<Image src="/hero.jpg" alt="Hero" width={1920} height={1080} />
+{/* Generates srcset:
+  /_vinext/image?url=/hero.jpg&w=640&q=75 640w,
+  /_vinext/image?url=/hero.jpg&w=750&q=75 750w,
+  /_vinext/image?url=/hero.jpg&w=828&q=75 828w,
+  ...
+*/}
+```
+
+Breakpoints: `[640, 750, 828, 1080, 1200, 1920, 2048, 3840]`
+
+## Static Imports
+
+Importing images provides automatic width/height:
+
+```tsx
+import hero from './hero.jpg'
+
+console.log(hero)
+// {
+//   src: '/_next/static/media/hero.abc123.jpg',
+//   width: 1920,
+//   height: 1080,
+//   blurDataURL: 'data:image/jpeg;base64,...'
+// }
+
+<Image src={hero} alt="Hero" placeholder="blur" />
+```
+
+## getImageProps
+
+For advanced use cases (art direction, `<picture>` elements):
+
+```tsx
+import { getImageProps } from 'next/image'
+
+export default function Hero() {
+  const common = { alt: 'Hero', width: 800, height: 600 }
+  const { props: desktopProps } = getImageProps({ ...common, src: '/hero-desktop.jpg' })
+  const { props: mobileProps } = getImageProps({ ...common, src: '/hero-mobile.jpg' })
+  
+  return (
+    <picture>
+      <source media="(min-width: 768px)" srcSet={desktopProps.srcSet} />
+      <source media="(max-width: 767px)" srcSet={mobileProps.srcSet} />
+      <img {...desktopProps} />
+    </picture>
+  )
+}
+```
+
+## Security
+
+### Blur Data URL Sanitization
+
+vinext validates `blurDataURL` to prevent CSS injection:
+
+```tsx
+{/* ✅ Valid */}
+<Image blurDataURL="data:image/jpeg;base64,/9j/4AAQSkZJRg..." />
+
+{/* ❌ Blocked — contains ')' which could break CSS url() */}
+<Image blurDataURL="data:image/jpeg;base64,abc); } body { background: red; } .x { (" />
+```
+
+### Remote Pattern Validation
+
+All remote URLs are validated against configured patterns. Missing configuration blocks production requests.
+
+## Limitations
+
+<Warning>
+  **`layout` prop**: Deprecated in Next.js 13+. Use `fill` instead of `layout="fill"`.
+</Warning>
+
+<Warning>
+  **Server-side optimization**: vinext does not perform image optimization at build time (no static generation of multiple sizes).
+</Warning>
+
+## Source
+
+[View source code →](https://github.com/stackblitz/vinext/blob/main/packages/vinext/src/shims/image.tsx)
+
+Implementation: `/home/daytona/workspace/source/packages/vinext/src/shims/image.tsx`

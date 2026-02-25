@@ -1,0 +1,266 @@
+---
+title: next/link
+description: Client-side navigation with automatic prefetching
+---
+
+The `Link` component enables client-side navigation without full page reloads. vinext's implementation provides viewport-based prefetching, locale support, and scroll management.
+
+## Import
+
+```typescript
+import Link from 'next/link'
+```
+
+## Basic Usage
+
+```tsx
+import Link from 'next/link'
+
+export default function Navigation() {
+  return (
+    <nav>
+      <Link href="/about">About</Link>
+      <Link href="/blog">Blog</Link>
+    </nav>
+  )
+}
+```
+
+## API Reference
+
+### Props
+
+<ParamField path="href" type="string | UrlObject" required>
+  The path or URL to navigate to.
+  
+  Can be a string:
+  ```tsx
+  <Link href="/dashboard">Dashboard</Link>
+  ```
+  
+  Or an object with pathname and query:
+  ```tsx
+  <Link href={{ pathname: '/user/[id]', query: { id: '123' } }}>
+    User Profile
+  </Link>
+  ```
+</ParamField>
+
+<ParamField path="as" type="string">
+  URL displayed in the browser (for dynamic routes).
+  
+  **Legacy pattern** — use the `href` string directly instead:
+  ```tsx
+  {/* Old */}
+  <Link href="/user/[id]" as="/user/123">User</Link>
+  
+  {/* New */}
+  <Link href="/user/123">User</Link>
+  ```
+</ParamField>
+
+<ParamField path="replace" type="boolean" default="false">
+  Replace the current history entry instead of pushing a new one.
+  
+  ```tsx
+  <Link href="/login" replace>
+    Login
+  </Link>
+  ```
+</ParamField>
+
+<ParamField path="prefetch" type="boolean" default="true">
+  Enable automatic prefetching when the link enters the viewport.
+  
+  Uses `IntersectionObserver` with a 250px margin. Set to `false` to disable:
+  ```tsx
+  <Link href="/heavy-page" prefetch={false}>
+    Heavy Page
+  </Link>
+  ```
+</ParamField>
+
+<ParamField path="scroll" type="boolean" default="true">
+  Scroll to top after navigation (unless navigating to a hash).
+  
+  ```tsx
+  <Link href="/page" scroll={false}>
+    Stay at Current Scroll Position
+  </Link>
+  ```
+</ParamField>
+
+<ParamField path="locale" type="string | false">
+  Locale for i18n routing.
+  
+  - `locale="fr"` — prepend `/fr` prefix
+  - `locale={false}` — use default locale (no prefix)
+  - `locale={undefined}` — use current locale
+  
+  ```tsx
+  <Link href="/" locale="fr">
+    Français
+  </Link>
+  ```
+</ParamField>
+
+<ParamField path="onNavigate" type="(event: NavigateEvent) => void">
+  Called before navigation (Next.js 16+ View Transitions API).
+  
+  Call `event.preventDefault()` to handle navigation manually:
+  ```tsx
+  <Link 
+    href="/about"
+    onNavigate={(e) => {
+      if (document.startViewTransition) {
+        e.preventDefault()
+        document.startViewTransition(() => {
+          // Custom transition logic
+        })
+      }
+    }}
+  >
+    About with Transition
+  </Link>
+  ```
+</ParamField>
+
+### Standard Anchor Props
+
+All standard `<a>` attributes are supported:
+
+```tsx
+<Link 
+  href="/profile"
+  className="nav-link"
+  id="profile-link"
+  onClick={(e) => console.log('clicked')}
+  target="_blank"  // External links
+  rel="noopener"
+>
+  Profile
+</Link>
+```
+
+## Prefetching
+
+### How It Works
+
+1. **Viewport detection**: When a `<Link>` enters the viewport (+ 250px margin), prefetching begins
+2. **App Router**: Fetches the `.rsc` payload and stores in memory cache
+3. **Pages Router**: Injects a `<link rel="prefetch">` tag
+4. **Deduplication**: Each URL is prefetched only once
+
+### Cache TTL
+
+Prefetched entries are valid for 30 seconds. After expiry, the link re-prefetches on next viewport entry.
+
+### Disabling Prefetch
+
+```tsx
+{/* Never prefetch */}
+<Link href="/admin" prefetch={false}>
+  Admin Panel
+</Link>
+
+{/* Prefetch on hover instead */}
+<Link 
+  href="/search"
+  prefetch={false}
+  onMouseEnter={() => router.prefetch('/search')}
+>
+  Search
+</Link>
+```
+
+## Hash Links
+
+Hash-only navigation updates the URL without triggering a full navigation:
+
+```tsx
+<Link href="#section-2">Jump to Section 2</Link>
+<Link href="?filter=active#results">Filter and Jump</Link>
+```
+
+Scrolls to the target element using `element.scrollIntoView()`.
+
+## External Links
+
+External URLs are passed through to the browser:
+
+```tsx
+<Link href="https://example.com" target="_blank" rel="noopener">
+  External Site
+</Link>
+```
+
+No prefetching or client-side handling occurs.
+
+## useLinkStatus Hook
+
+Track the pending state of a parent `<Link>`:
+
+```tsx
+import Link, { useLinkStatus } from 'next/link'
+
+function LinkContent() {
+  const { pending } = useLinkStatus()
+  
+  return (
+    <span>
+      {pending && <Spinner />}
+      Click Me
+    </span>
+  )
+}
+
+export default function Nav() {
+  return (
+    <Link href="/slow-page">
+      <LinkContent />
+    </Link>
+  )
+}
+```
+
+## Router Integration
+
+### App Router
+
+Calls `window.__VINEXT_RSC_NAVIGATE__()` to fetch and render the new RSC stream.
+
+### Pages Router
+
+Dynamically imports the target page module and re-renders the React root.
+
+## basePath Support
+
+If `basePath` is configured in `next.config.js`, it's automatically prepended:
+
+```javascript
+// next.config.js
+module.exports = {
+  basePath: '/docs'
+}
+```
+
+```tsx
+{/* Renders as /docs/api */}
+<Link href="/api">API</Link>
+```
+
+## Limitations
+
+<Warning>
+  **Shallow routing**: The `shallow` option is not supported in App Router (Next.js removed it).
+</Warning>
+
+<Warning>
+  **Middleware rewrites**: Links to rewritten paths work correctly, but the browser URL shows the rewrite destination (no masking).
+</Warning>
+
+## Source
+
+[View source code →](https://github.com/stackblitz/vinext/blob/main/packages/vinext/src/shims/link.tsx)
+
+Implementation: `/home/daytona/workspace/source/packages/vinext/src/shims/link.tsx`

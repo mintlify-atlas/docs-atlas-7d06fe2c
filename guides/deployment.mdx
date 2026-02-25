@@ -1,0 +1,497 @@
+---
+title: Deployment Guide
+description: Deploy vinext applications to production environments
+---
+
+# Deployment Guide
+
+vinext applications can be deployed to multiple environments. Cloudflare Workers is the primary target with first-class support, but other platforms are also possible.
+
+## Quick Deploy to Cloudflare Workers
+
+The fastest way to deploy is using the built-in deploy command:
+
+```bash
+vinext deploy
+```
+
+This single command:
+- Detects your router type (App Router or Pages Router)
+- Auto-generates missing configuration files
+- Installs required dependencies
+- Runs the production build
+- Deploys to Cloudflare Workers
+
+See the [Cloudflare Workers guide](/guides/cloudflare-workers) for detailed deployment instructions.
+
+## Production Build
+
+Before deploying to any platform, create a production build:
+
+<CodeGroup>
+```bash npm
+npm run build
+```
+
+```bash pnpm
+pnpm build
+```
+
+```bash yarn
+yarn build
+```
+</CodeGroup>
+
+Or use the vinext CLI directly:
+
+```bash
+vinext build
+```
+
+### Build Output
+
+vinext generates different build outputs based on your router type:
+
+#### App Router Build
+
+Multi-environment build with three separate bundles:
+
+```
+dist/
+├── rsc/              # React Server Components environment
+│   └── index.js      # RSC request handler
+├── ssr/              # Server-Side Rendering environment  
+│   └── index.js      # SSR renderer
+└── client/           # Browser environment
+    ├── index.js      # Client hydration entry
+    └── assets/       # CSS, fonts, images
+```
+
+The RSC entry handles routing, the SSR entry renders HTML, and the client bundle provides hydration and interactivity.
+
+#### Pages Router Build
+
+```
+dist/
+├── server/           # Server bundle
+│   └── index.js      # SSR + API routes handler
+└── client/           # Browser bundle
+    ├── pages/        # Per-page chunks
+    └── assets/       # Static assets
+```
+
+## Deployment Targets
+
+### Cloudflare Workers (Recommended)
+
+Cloudflare Workers is the primary deployment target with full feature support:
+
+✅ **Zero cold starts** - Workers run globally with instant startup  
+✅ **Edge computing** - Deploy to 300+ cities worldwide  
+✅ **ISR via KV** - Built-in cache handler for incremental static regeneration  
+✅ **Image optimization** - Native Cloudflare Images integration  
+✅ **One-command deploy** - `vinext deploy` handles everything  
+
+**Supported Features**:
+- App Router with React Server Components
+- Pages Router with SSR and API routes
+- Middleware and rewrites
+- Server Actions
+- ISR (Incremental Static Regeneration)
+- Streaming SSR
+- Image optimization via Cloudflare Images
+
+See [Cloudflare Workers Deployment](/guides/cloudflare-workers) for complete instructions.
+
+### Static Export
+
+Generate a fully static site that can be deployed to any static hosting provider:
+
+```javascript
+// next.config.js
+module.exports = {
+  output: 'export',
+};
+```
+
+Then build:
+
+```bash
+vinext build
+```
+
+This produces a `dist/` directory with static HTML, CSS, and JavaScript files. Deploy to:
+
+- **Cloudflare Pages**
+- **Vercel**
+- **Netlify**
+- **GitHub Pages**
+- **AWS S3 + CloudFront**
+- **Any static file server**
+
+**Limitations**:
+- No server-side rendering (SSR)
+- No API routes
+- No dynamic routes without `generateStaticParams()` (App Router) or `getStaticPaths()` (Pages Router)
+- No ISR
+
+See [Static Export Guide](/guides/static-export) for details.
+
+### Node.js Server
+
+Run a production Node.js server locally or in a container:
+
+```bash
+vinext start
+```
+
+This starts a production server with:
+- SSR (Server-Side Rendering)
+- API routes (Pages Router) / Route handlers (App Router)
+- Middleware
+- Response compression (gzip/brotli)
+
+**Use Cases**:
+- Testing production builds locally
+- Deploying to VM-based hosts
+- Docker containers
+- Traditional Node.js hosting
+
+**Options**:
+```bash
+vinext start --port 3000          # Custom port
+vinext start --hostname 0.0.0.0   # Bind to all interfaces
+```
+
+<Note>
+  The Node.js production server is less optimized than Cloudflare Workers deployment. Workers is the recommended production target.
+</Note>
+
+### Custom Deployment
+
+For other platforms, you can import the production build programmatically:
+
+#### App Router
+
+```typescript
+import handler from './dist/rsc/index.js';
+
+// Your platform's request handler
+export default {
+  async fetch(request: Request): Promise<Response> {
+    return handler.fetch(request);
+  }
+};
+```
+
+#### Pages Router
+
+```typescript
+import { renderPage, handleApiRoute } from './dist/server/index.js';
+
+export default async function handler(request: Request) {
+  const url = new URL(request.url);
+  
+  if (url.pathname.startsWith('/api/')) {
+    return handleApiRoute(request, url.pathname + url.search);
+  }
+  
+  return renderPage(request, url.pathname + url.search, null);
+}
+```
+
+## Environment-Specific Configuration
+
+Use different configs for different environments:
+
+### Development
+
+```typescript
+// vite.config.ts
+import { defineConfig } from 'vite';
+import vinext from 'vinext';
+
+export default defineConfig({
+  plugins: [vinext()],
+  server: {
+    port: 3000,
+  },
+});
+```
+
+### Production (Cloudflare Workers)
+
+```typescript
+// vite.config.ts
+import { defineConfig } from 'vite';
+import vinext from 'vinext';
+import { cloudflare } from '@cloudflare/vite-plugin';
+
+export default defineConfig({
+  plugins: [
+    vinext(),
+    cloudflare({
+      viteEnvironment: {
+        name: 'rsc',
+        childEnvironments: ['ssr'],
+      },
+    }),
+  ],
+});
+```
+
+### Conditional Config
+
+```typescript
+import { defineConfig } from 'vite';
+import vinext from 'vinext';
+import { cloudflare } from '@cloudflare/vite-plugin';
+
+export default defineConfig(({ mode }) => {
+  const isProduction = mode === 'production';
+  
+  return {
+    plugins: [
+      vinext(),
+      isProduction && cloudflare(),
+    ].filter(Boolean),
+    build: {
+      minify: isProduction,
+      sourcemap: !isProduction,
+    },
+  };
+});
+```
+
+## CI/CD Integration
+
+### GitHub Actions (Cloudflare Workers)
+
+```yaml
+name: Deploy to Cloudflare Workers
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          
+      - name: Install dependencies
+        run: npm ci
+        
+      - name: Build and Deploy
+        run: npx vinext deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+```
+
+### GitHub Actions (Static Export)
+
+```yaml
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          
+      - name: Install dependencies
+        run: npm ci
+        
+      - name: Build
+        run: npm run build
+        
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist
+```
+
+## Performance Optimization
+
+### Bundle Size
+
+vinext produces smaller client bundles than Next.js due to:
+- More aggressive tree-shaking (Vite/Rollup)
+- Lighter client-side router
+- Minimal framework overhead
+
+**Typical savings**: 20-30% smaller gzipped bundles.
+
+### Build Speed
+
+Benchmarks show vinext builds are significantly faster than Next.js:
+- **Development cold start**: ~2-3x faster
+- **Production build**: ~1.5-2x faster
+- **HMR updates**: Near-instant
+
+See [benchmarks.vinext.workers.dev](https://benchmarks.vinext.workers.dev) for detailed metrics.
+
+### Code Splitting
+
+Vite automatically code-splits:
+- Per-route chunks (lazy loaded)
+- Shared dependency extraction
+- CSS code splitting
+- Dynamic imports
+
+No configuration needed—it works out of the box.
+
+## Health Checks
+
+Add a health check endpoint for monitoring:
+
+#### App Router
+
+```typescript
+// app/health/route.ts
+export async function GET() {
+  return Response.json({ status: 'ok' });
+}
+```
+
+#### Pages Router
+
+```typescript
+// pages/api/health.ts
+export default function handler(req, res) {
+  res.status(200).json({ status: 'ok' });
+}
+```
+
+## Rollback Strategy
+
+Cloudflare Workers deployments support instant rollback:
+
+```bash
+# List recent deployments
+wrangler deployments list
+
+# Rollback to a specific version
+wrangler rollback <deployment-id>
+```
+
+For other platforms, maintain multiple deployment slots or use your hosting provider's rollback features.
+
+## Monitoring
+
+### Cloudflare Analytics
+
+Workers deployments include built-in analytics:
+- Request volume and errors
+- CPU time per request
+- Edge response times
+- Geographic distribution
+
+Access via the [Cloudflare Dashboard](https://dash.cloudflare.com).
+
+### Custom Logging
+
+```typescript
+// app/middleware.ts
+import { NextResponse } from 'next/server';
+
+export function middleware(request) {
+  const start = Date.now();
+  const response = NextResponse.next();
+  const duration = Date.now() - start;
+  
+  console.log({
+    method: request.method,
+    url: request.url,
+    duration,
+    status: response.status,
+  });
+  
+  return response;
+}
+```
+
+## Troubleshooting
+
+### Build Failures
+
+**Error**: `Cannot find module` during build
+
+**Solution**: Ensure all dependencies are installed:
+```bash
+npm ci  # Clean install from package-lock.json
+```
+
+### Memory Issues
+
+**Error**: JavaScript heap out of memory
+
+**Solution**: Increase Node.js memory limit:
+```bash
+NODE_OPTIONS="--max-old-space-size=4096" vinext build
+```
+
+### Deploy Failures (Cloudflare)
+
+**Error**: `Authentication error` during deploy
+
+**Solution**: Set your Cloudflare API token:
+```bash
+export CLOUDFLARE_API_TOKEN="your-token-here"
+vinext deploy
+```
+
+Generate tokens at: https://dash.cloudflare.com/profile/api-tokens
+
+### Large Bundle Sizes
+
+**Problem**: Client bundle is larger than expected
+
+**Solution**: Analyze the bundle:
+```bash
+npm install --save-dev rollup-plugin-visualizer
+```
+
+Add to `vite.config.ts`:
+```typescript
+import { visualizer } from 'rollup-plugin-visualizer';
+
+export default defineConfig({
+  plugins: [
+    vinext(),
+    visualizer({ open: true }),
+  ],
+});
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Cloudflare Workers" icon="cloud" href="/guides/cloudflare-workers">
+    Complete guide to deploying on Cloudflare Workers
+  </Card>
+  <Card title="Static Export" icon="file-export" href="/guides/static-export">
+    Generate static HTML for any hosting provider
+  </Card>
+  <Card title="Configuration" icon="sliders" href="/guides/configuration">
+    Advanced configuration options
+  </Card>
+  <Card title="Build Pipeline" icon="gauge" href="/advanced/build-pipeline">
+    Build optimization and performance
+  </Card>
+</CardGroup>

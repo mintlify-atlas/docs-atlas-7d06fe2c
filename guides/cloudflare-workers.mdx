@@ -1,0 +1,589 @@
+---
+title: Cloudflare Workers Deployment
+description: Deploy vinext applications to Cloudflare Workers with one command
+---
+
+# Cloudflare Workers Deployment
+
+vinext is built for Cloudflare Workers—zero cold starts, global edge deployment, and integrated platform services (KV, R2, D1, AI).
+
+## One-Command Deploy
+
+The simplest way to deploy is using the built-in deploy command:
+
+```bash
+vinext deploy
+```
+
+This command:
+
+<Steps>
+  <Step title="Detects Your Router">
+    Automatically detects whether you're using App Router or Pages Router and generates appropriate configuration.
+  </Step>
+
+  <Step title="Installs Dependencies">
+    Checks for and installs required packages:
+    - `@cloudflare/vite-plugin` (Workers integration)
+    - `wrangler` (Cloudflare CLI)
+    - `@vitejs/plugin-rsc` (App Router only)
+  </Step>
+
+  <Step title="Generates Config Files">
+    Creates missing files if they don't exist:
+    - `wrangler.jsonc` - Workers configuration
+    - `vite.config.ts` - Vite build config
+    - `worker/index.ts` - Worker entry point
+  </Step>
+
+  <Step title="Fixes ESM Issues">
+    Automatically:
+    - Adds `"type": "module"` to package.json
+    - Renames CJS config files to `.cjs` extension
+    - Resolves path aliases from tsconfig.json
+  </Step>
+
+  <Step title="Builds and Deploys">
+    Runs the Vite build and deploys to Cloudflare Workers using wrangler.
+  </Step>
+</Steps>
+
+### Deploy Options
+
+```bash
+vinext deploy                      # Deploy to production
+vinext deploy --preview            # Deploy to preview environment
+vinext deploy --name my-app        # Custom project name
+vinext deploy --skip-build         # Skip build (use existing dist/)
+vinext deploy --dry-run            # Generate config without deploying
+```
+
+## Generated Configuration
+
+### wrangler.jsonc
+
+The deploy command generates a complete Wrangler configuration:
+
+```json
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "my-vinext-app",
+  "compatibility_date": "2025-02-25",
+  "compatibility_flags": ["nodejs_compat"],
+  "main": "./worker/index.ts",
+  "assets": {
+    "not_found_handling": "none",
+    "binding": "ASSETS"
+  },
+  "images": {
+    "binding": "IMAGES"
+  }
+}
+```
+
+**Key Configuration**:
+- `main` - Entry point for your Worker
+- `assets` - Serves static files (JS, CSS, images) with binding for programmatic access
+- `images` - Cloudflare Images binding for next/image optimization
+- `compatibility_flags` - Enables Node.js compatibility layer
+
+### Worker Entry (App Router)
+
+For App Router projects, vinext generates `worker/index.ts`:
+
+```typescript
+import { handleImageOptimization } from "vinext/server/image-optimization";
+import handler from "vinext/server/app-router-entry";
+
+interface Env {
+  ASSETS: Fetcher;
+  IMAGES: {
+    input(stream: ReadableStream): {
+      transform(options: Record<string, unknown>): {
+        output(options: { format: string; quality: number }): Promise<{ response(): Response }>;
+      };
+    };
+  };
+}
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url);
+
+    // Image optimization via Cloudflare Images binding
+    if (url.pathname === "/_vinext/image") {
+      return handleImageOptimization(request, {
+        fetchAsset: (path) => env.ASSETS.fetch(new Request(new URL(path, request.url))),
+        transformImage: async (body, { width, format, quality }) => {
+          const result = await env.IMAGES.input(body).transform(width > 0 ? { width } : {}).output({ format, quality });
+          return result.response();
+        },
+      });
+    }
+
+    // Delegate everything else to vinext
+    return handler.fetch(request);
+  },
+};
+```
+
+### Worker Entry (Pages Router)
+
+```typescript
+import { handleImageOptimization } from "vinext/server/image-optimization";
+import { renderPage, handleApiRoute } from "virtual:vinext-server-entry";
+
+interface Env {
+  ASSETS: Fetcher;
+  IMAGES: { /* ... */ };
+}
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url);
+
+    // Image optimization
+    if (url.pathname === "/_vinext/image") {
+      return handleImageOptimization(request, { /* ... */ });
+    }
+
+    // API routes
+    if (url.pathname.startsWith("/api/")) {
+      return await handleApiRoute(request, url.pathname + url.search);
+    }
+
+    // Page routes
+    return await renderPage(request, url.pathname + url.search, null);
+  },
+};
+```
+
+### Vite Config (App Router)
+
+```typescript
+import { defineConfig } from "vite";
+import vinext from "vinext";
+import { cloudflare } from "@cloudflare/vite-plugin";
+
+export default defineConfig({
+  plugins: [
+    vinext(),
+    cloudflare({
+      viteEnvironment: {
+        name: "rsc",
+        childEnvironments: ["ssr"],
+      },
+    }),
+  ],
+});
+```
+
+### Vite Config (Pages Router)
+
+```typescript
+import { defineConfig } from "vite";
+import vinext from "vinext";
+import { cloudflare } from "@cloudflare/vite-plugin";
+
+export default defineConfig({
+  plugins: [
+    vinext(),
+    cloudflare(),
+  ],
+});
+```
+
+## Image Optimization
+
+vinext integrates with Cloudflare Images for edge image optimization:
+
+```typescript
+import Image from 'next/image';
+
+export default function Page() {
+  return (
+    <Image
+      src="/photos/landscape.jpg"
+      alt="Landscape"
+      width={1200}
+      height={800}
+      quality={85}
+    />
+  );
+}
+```
+
+**Features**:
+- Automatic format negotiation (AVIF, WebP, JPEG)
+- On-demand resizing
+- Quality optimization
+- CDN caching
+
+The `/_vinext/image` endpoint handles all transformations using the Cloudflare Images binding.
+
+## Incremental Static Regeneration (ISR)
+
+For apps using ISR, add a KV namespace to `wrangler.jsonc`:
+
+```json
+{
+  "kv_namespaces": [
+    {
+      "binding": "VINEXT_CACHE",
+      "id": "<your-kv-namespace-id>"
+    }
+  ]
+}
+```
+
+Create a KV namespace:
+
+```bash
+wrangler kv:namespace create VINEXT_CACHE
+```
+
+Then configure the cache handler:
+
+```typescript
+// app/layout.tsx (App Router) or pages/_app.tsx (Pages Router)
+import { KVCacheHandler } from "vinext/cloudflare";
+import { setCacheHandler } from "next/cache";
+
+// In a Worker environment:
+if (typeof process === 'undefined') {
+  setCacheHandler(new KVCacheHandler(env.VINEXT_CACHE));
+}
+```
+
+### ISR Example
+
+```typescript
+// app/blog/[slug]/page.tsx
+export const revalidate = 3600; // 1 hour
+
+export default async function BlogPost({ params }) {
+  const post = await fetchPost(params.slug);
+  return <article>{post.content}</article>;
+}
+```
+
+The page is:
+1. Rendered on first request and cached in KV
+2. Served from cache for 1 hour (stale-while-revalidate)
+3. Regenerated in the background after expiration
+4. Updated cache serves subsequent requests
+
+## Traffic-Aware Pre-Rendering (TPR)
+
+**Experimental**: Pre-render only the pages that actually receive traffic.
+
+```bash
+vinext deploy --experimental-tpr
+```
+
+TPR queries Cloudflare zone analytics at deploy time to find which pages get traffic, pre-renders only those, and uploads them to KV cache.
+
+**Options**:
+```bash
+vinext deploy --experimental-tpr --tpr-coverage 90   # Cover 90% of traffic (default)
+vinext deploy --experimental-tpr --tpr-limit 500     # Max 500 pages
+vinext deploy --experimental-tpr --tpr-window 48     # Use 48h of analytics
+```
+
+**Requirements**:
+- Custom domain (zone analytics unavailable on `*.workers.dev`)
+- `CLOUDFLARE_API_TOKEN` with Zone.Analytics read permission
+
+**Benefits**:
+- SSG-level latency for popular pages
+- No full-site pre-rendering
+- Automatic based on real traffic data
+
+## Environment Variables
+
+### Build-Time Variables
+
+`NEXT_PUBLIC_*` variables are inlined at build time:
+
+```bash
+# .env.production
+NEXT_PUBLIC_API_URL=https://api.example.com
+```
+
+```typescript
+// Available in both server and client code
+const apiUrl = process.env.NEXT_PUBLIC_API_URL;
+```
+
+### Runtime Variables (Secrets)
+
+For sensitive data, use Wrangler secrets:
+
+```bash
+echo "your-secret-value" | wrangler secret put DATABASE_URL
+```
+
+Access in your Worker:
+
+```typescript
+// app/api/data/route.ts
+export async function GET(request: Request, { env }) {
+  const db = connectToDatabase(env.DATABASE_URL);
+  // ...
+}
+```
+
+Or via `wrangler.toml` for non-sensitive values:
+
+```toml
+[env.production]
+API_URL = "https://api.example.com"
+
+[env.preview]
+API_URL = "https://preview.api.example.com"
+```
+
+## Platform Bindings
+
+Access Cloudflare platform services via environment bindings:
+
+### KV (Key-Value Storage)
+
+```toml
+# wrangler.toml
+kv_namespaces = [
+  { binding = "MY_KV", id = "abc123" }
+]
+```
+
+```typescript
+// app/api/cache/route.ts
+export async function GET(request: Request, { env }) {
+  const value = await env.MY_KV.get('key');
+  return Response.json({ value });
+}
+```
+
+### D1 (SQLite Database)
+
+```toml
+# wrangler.toml
+d1_databases = [
+  { binding = "DB", database_name = "my-database", database_id = "xyz789" }
+]
+```
+
+```typescript
+export async function GET(request: Request, { env }) {
+  const result = await env.DB.prepare('SELECT * FROM users').all();
+  return Response.json(result);
+}
+```
+
+### R2 (Object Storage)
+
+```toml
+# wrangler.toml
+r2_buckets = [
+  { binding = "MY_BUCKET", bucket_name = "uploads" }
+]
+```
+
+```typescript
+export async function POST(request: Request, { env }) {
+  const file = await request.blob();
+  await env.MY_BUCKET.put('file.jpg', file);
+  return new Response('Uploaded', { status: 200 });
+}
+```
+
+## Custom Domains
+
+Add a custom domain via Cloudflare Dashboard or wrangler:
+
+```bash
+wrangler domains add example.com
+```
+
+Or in `wrangler.toml`:
+
+```toml
+routes = [
+  { pattern = "example.com/*", zone_name = "example.com" }
+]
+```
+
+## Preview Deployments
+
+Create preview deployments for testing:
+
+```bash
+vinext deploy --preview
+```
+
+Preview deployments:
+- Get a unique URL (e.g., `my-app-preview.workers.dev`)
+- Don't affect production
+- Can be tested before promoting to production
+
+## CI/CD with GitHub Actions
+
+```yaml
+name: Deploy to Cloudflare Workers
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Deploy to Production
+        if: github.ref == 'refs/heads/main'
+        run: npx vinext deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Deploy to Preview
+        if: github.event_name == 'pull_request'
+        run: npx vinext deploy --preview
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+```
+
+## Monitoring and Logs
+
+### Real-Time Logs
+
+```bash
+wrangler tail
+```
+
+Stream logs from your Worker in real-time.
+
+### Analytics Dashboard
+
+View metrics in the [Cloudflare Dashboard](https://dash.cloudflare.com):
+- Request volume
+- Error rates
+- CPU time per request
+- Geographic distribution
+- Cache hit ratios
+
+### Custom Logging
+
+```typescript
+// middleware.ts
+export function middleware(request) {
+  console.log({
+    timestamp: new Date().toISOString(),
+    method: request.method,
+    url: request.url,
+    userAgent: request.headers.get('user-agent'),
+  });
+  
+  return NextResponse.next();
+}
+```
+
+Logs appear in `wrangler tail` and the Cloudflare dashboard.
+
+## Troubleshooting
+
+### Authentication Error
+
+**Error**: `Authentication error` during deploy
+
+**Solution**: Generate a Cloudflare API token:
+1. Go to https://dash.cloudflare.com/profile/api-tokens
+2. Click "Create Token"
+3. Use the "Edit Cloudflare Workers" template
+4. Set the token:
+   ```bash
+   export CLOUDFLARE_API_TOKEN="your-token"
+   ```
+
+### Worker Size Exceeded
+
+**Error**: `Worker size exceeds limit`
+
+**Solution**: Workers have a 1 MB limit after compression. Reduce bundle size:
+- Remove unused dependencies
+- Use dynamic imports for large libraries
+- Check bundle size with `rollup-plugin-visualizer`
+
+### Native Modules Error
+
+**Error**: `Error: Cannot find module 'sharp'` or similar
+
+**Solution**: Native Node.js modules can't run in Workers. vinext auto-stubs common ones (`sharp`, `resvg`, `satori`), but if you encounter others:
+
+```typescript
+// vite.config.ts
+import path from "node:path";
+
+export default defineConfig({
+  plugins: [vinext()],
+  resolve: {
+    alias: {
+      "problematic-module": path.resolve(__dirname, "empty-stub.js"),
+    },
+  },
+});
+```
+
+Create `empty-stub.js`:
+```javascript
+export default {};
+```
+
+### ISR Not Working
+
+**Problem**: Pages aren't being cached
+
+**Solution**: Verify:
+1. KV namespace is created and bound in `wrangler.jsonc`
+2. Cache handler is configured with `setCacheHandler()`
+3. Routes have `revalidate` set (App Router) or return `revalidate` from `getStaticProps` (Pages Router)
+
+## Performance
+
+vinext on Cloudflare Workers delivers:
+
+- **Cold starts**: 0ms (Workers have no cold starts)
+- **TTFB**: 10-50ms globally (edge execution)
+- **Bundle size**: 20-30% smaller than Next.js
+- **Build time**: ~2x faster than Next.js
+
+See live benchmarks at [benchmarks.vinext.workers.dev](https://benchmarks.vinext.workers.dev)
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Configuration Guide" icon="sliders" href="/guides/configuration">
+    Advanced configuration and customization
+  </Card>
+  <Card title="ISR and Caching" icon="database" href="/concepts/caching">
+    Learn about caching strategies
+  </Card>
+  <Card title="Examples" icon="code" href="https://github.com/cloudflare/vinext/tree/main/examples">
+    Explore working example deployments
+  </Card>
+  <Card title="Workers Documentation" icon="book" href="https://developers.cloudflare.com/workers">
+    Official Cloudflare Workers docs
+  </Card>
+</CardGroup>

@@ -1,0 +1,336 @@
+---
+title: next/headers
+description: Server Component header and cookie access
+---
+
+The `next/headers` module provides functions for accessing request headers and cookies in Server Components, Route Handlers, and Server Actions.
+
+## Import
+
+```typescript
+import { headers, cookies, draftMode } from 'next/headers'
+```
+
+## headers
+
+Returns a read-only `Headers` instance for the incoming request.
+
+```tsx
+import { headers } from 'next/headers'
+
+export default async function Page() {
+  const headersList = await headers()
+  const userAgent = headersList.get('user-agent')
+  const referer = headersList.get('referer')
+  
+  return (
+    <div>
+      <p>User-Agent: {userAgent}</p>
+      <p>Referer: {referer || 'Direct'}</p>
+    </div>
+  )
+}
+```
+
+### Return Type
+
+<ResponseField name="headers" type="Promise<Headers>">
+  Standard Web `Headers` instance.
+  
+  **Methods:**
+  - `get(name: string): string | null`
+  - `has(name: string): boolean`
+  - `getSetCookie(): string[]`
+  - `entries(): Iterator<[string, string]>`
+  - `forEach(callback)`
+  
+  **Read-only** — mutations are ignored.
+</ResponseField>
+
+### Usage Notes
+
+<Warning>
+  **Async in Next.js 15+**: `headers()` returns a Promise. Always `await` it.
+</Warning>
+
+<Info>
+  **Dynamic rendering**: Calling `headers()` opts the page out of static rendering and ISR caching.
+</Info>
+
+### Example: Route Handler
+
+```typescript
+// app/api/info/route.ts
+import { headers } from 'next/headers'
+import { NextResponse } from 'next/server'
+
+export async function GET() {
+  const headersList = await headers()
+  const authorization = headersList.get('authorization')
+  
+  if (!authorization) {
+    return NextResponse.json(
+      { error: 'Unauthorized' },
+      { status: 401 }
+    )
+  }
+  
+  return NextResponse.json({ authenticated: true })
+}
+```
+
+## cookies
+
+Returns a cookie accessor for reading and writing cookies.
+
+```tsx
+import { cookies } from 'next/headers'
+
+export default async function Page() {
+  const cookieStore = await cookies()
+  const theme = cookieStore.get('theme')
+  
+  return <div>Theme: {theme?.value || 'default'}</div>
+}
+```
+
+### Return Type
+
+<ResponseField name="cookies" type="Promise<RequestCookies>">
+  Cookie accessor with read/write methods.
+  
+  **Read methods:**
+  - `get(name: string): { name: string; value: string } | undefined`
+  - `getAll(): Array<{ name: string; value: string }>`
+  - `has(name: string): boolean`
+  - `size: number`
+  
+  **Write methods** (Route Handlers / Server Actions only):
+  - `set(name: string, value: string, options?): this`
+  - `set(options: { name: string; value: string; ... }): this`
+  - `delete(name: string): this`
+</ResponseField>
+
+### Reading Cookies
+
+```tsx
+import { cookies } from 'next/headers'
+
+export default async function ProfilePage() {
+  const cookieStore = await cookies()
+  
+  // Get single cookie
+  const session = cookieStore.get('session')
+  if (!session) {
+    redirect('/login')
+  }
+  
+  // Get all cookies
+  const allCookies = cookieStore.getAll()
+  console.log('All cookies:', allCookies)
+  
+  // Check existence
+  const hasTheme = cookieStore.has('theme')
+  
+  return <Profile sessionId={session.value} />
+}
+```
+
+### Writing Cookies
+
+<Warning>
+  **Server Actions / Route Handlers only**: Writing cookies in Server Components has no effect.
+</Warning>
+
+```typescript
+// app/api/login/route.ts
+import { cookies } from 'next/headers'
+import { NextResponse } from 'next/server'
+
+export async function POST(request: Request) {
+  const { username, password } = await request.json()
+  const sessionId = await createSession(username, password)
+  
+  const cookieStore = await cookies()
+  cookieStore.set('session', sessionId, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    maxAge: 60 * 60 * 24 * 7  // 1 week
+  })
+  
+  return NextResponse.json({ success: true })
+}
+```
+
+```tsx
+// Server Action
+'use server'
+import { cookies } from 'next/headers'
+import { redirect } from 'next/navigation'
+
+export async function logout() {
+  const cookieStore = await cookies()
+  cookieStore.delete('session')
+  redirect('/login')
+}
+```
+
+### Cookie Options
+
+```typescript
+interface CookieOptions {
+  path?: string         // Default: "/"
+  domain?: string
+  maxAge?: number       // Seconds
+  expires?: Date
+  httpOnly?: boolean    // Default: false
+  secure?: boolean      // Default: false in dev, true in prod
+  sameSite?: 'Strict' | 'Lax' | 'None'  // Default: 'Lax'
+}
+```
+
+## draftMode
+
+Enable/disable draft mode for preview deployments.
+
+```tsx
+import { draftMode } from 'next/headers'
+
+export default async function Page() {
+  const { isEnabled } = await draftMode()
+  
+  return (
+    <div>
+      Draft mode: {isEnabled ? 'ON' : 'OFF'}
+    </div>
+  )
+}
+```
+
+### Return Type
+
+<ResponseField name="draftMode" type="Promise<DraftModeResult>">
+  Draft mode controller.
+  
+  ```typescript
+  interface DraftModeResult {
+    isEnabled: boolean
+    enable(): void
+    disable(): void
+  }
+  ```
+</ResponseField>
+
+### Usage: Enable Draft Mode
+
+```typescript
+// app/api/draft/route.ts
+import { draftMode } from 'next/headers'
+import { redirect } from 'next/navigation'
+
+export async function GET(request: Request) {
+  const { searchParams } = new URL(request.url)
+  const secret = searchParams.get('secret')
+  
+  // Verify secret token
+  if (secret !== process.env.DRAFT_SECRET) {
+    return new Response('Invalid token', { status: 401 })
+  }
+  
+  const draft = await draftMode()
+  draft.enable()
+  
+  // Redirect to the page you want to preview
+  redirect(searchParams.get('slug') || '/')
+}
+```
+
+### Usage: Disable Draft Mode
+
+```typescript
+// app/api/draft/disable/route.ts
+import { draftMode } from 'next/headers'
+import { redirect } from 'next/navigation'
+
+export async function GET() {
+  const draft = await draftMode()
+  draft.disable()
+  redirect('/')
+}
+```
+
+### Usage: Check Draft Mode
+
+```tsx
+import { draftMode } from 'next/headers'
+import { getPost, getDraftPost } from '@/lib/api'
+
+export default async function Post({ params }) {
+  const { isEnabled } = await draftMode()
+  
+  const post = isEnabled
+    ? await getDraftPost(params.slug)
+    : await getPost(params.slug)
+  
+  return (
+    <article>
+      {isEnabled && (
+        <div className="draft-banner">
+          You are viewing a draft
+        </div>
+      )}
+      <h1>{post.title}</h1>
+      <div>{post.content}</div>
+    </article>
+  )
+}
+```
+
+## How It Works
+
+### Request Context
+
+vinext uses `AsyncLocalStorage` to maintain per-request context:
+
+1. **Entry**: Server entry sets context before rendering
+2. **Access**: `headers()` / `cookies()` read from ALS
+3. **Cleanup**: Context is cleared after response
+
+This ensures concurrent requests don't share state.
+
+### Dynamic Usage Tracking
+
+Calling `headers()` or `cookies()` marks the page as dynamic:
+
+- **ISR caching**: Bypassed
+- **Response headers**: `Cache-Control: no-store`
+- **Rendering**: On-demand per request
+
+## Limitations
+
+<Warning>
+  **Client Components**: Cannot call `headers()` or `cookies()` in client components. Pass data as props.
+</Warning>
+
+<Warning>
+  **Writing in Server Components**: Cookie writes in Server Components have no effect. Use Route Handlers or Server Actions.
+</Warning>
+
+<Warning>
+  **SSR timing**: These functions can only be called after the request context is set. Calling them at module-level or in global scope will throw.
+</Warning>
+
+## Migration from Pages Router
+
+| Pages Router | App Router |
+|--------------|------------|
+| `req.headers` (getServerSideProps) | `await headers()` (Server Component) |
+| `req.cookies` | `await cookies()` |
+| `res.setHeader('Set-Cookie', ...)` | `cookieStore.set(...)` (Route Handler) |
+
+## Source
+
+[View source code →](https://github.com/stackblitz/vinext/blob/main/packages/vinext/src/shims/headers.ts)
+
+Implementation: `/home/daytona/workspace/source/packages/vinext/src/shims/headers.ts`

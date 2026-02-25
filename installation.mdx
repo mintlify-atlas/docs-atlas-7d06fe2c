@@ -1,0 +1,606 @@
+---
+title: Installation
+description: Detailed installation guide for vinext. Learn how to migrate an existing Next.js project or configure vinext from scratch.
+---
+
+# Installation
+
+This guide covers everything you need to know about installing and configuring vinext, from basic setup to advanced customization.
+
+## Prerequisites
+
+Before you begin, make sure you have:
+
+- Node.js 18+ installed
+- An existing Next.js project (or create a new one)
+- Basic familiarity with Next.js and Vite
+
+<Note>
+  vinext requires React 19.2.0+, React DOM 19.2.0+, and Vite 7.0.0+ as peer dependencies.
+</Note>
+
+## Installation Methods
+
+### Method 1: Using vinext init (Recommended)
+
+The `vinext init` command automates the entire migration process:
+
+<Steps>
+  <Step title="Install vinext">
+    ```bash
+    npm install vinext
+    ```
+
+    Or use your preferred package manager:
+
+    <CodeGroup>
+    ```bash npm
+    npm install vinext
+    ```
+
+    ```bash pnpm
+    pnpm add vinext
+    ```
+
+    ```bash yarn
+    yarn add vinext
+    ```
+
+    ```bash bun
+    bun add vinext
+    ```
+    </CodeGroup>
+  </Step>
+
+  <Step title="Run the migration command">
+    ```bash
+    npx vinext init
+    ```
+
+    This command will:
+
+    1. **Run compatibility check** — Scans your project for potential issues
+    2. **Install dependencies** — Adds `vite` and `@vitejs/plugin-rsc` (for App Router) as devDependencies
+    3. **Configure ESM** — Adds `"type": "module"` to `package.json`
+    4. **Rename CJS configs** — Renames files like `postcss.config.js` to `.cjs` to avoid ESM conflicts
+    5. **Add npm scripts** — Adds `dev:vinext` and `build:vinext` to `package.json`
+    6. **Generate vite.config.ts** — Creates a minimal Vite configuration
+
+    <Tip>
+      Use `vinext init --force` to overwrite an existing `vite.config.ts`, or `vinext init --skip-check` to skip the compatibility report.
+    </Tip>
+  </Step>
+
+  <Step title="Start developing">
+    ```bash
+    npm run dev:vinext
+    ```
+
+    Your app will be available at `http://localhost:3001` (configurable with `--port`).
+  </Step>
+</Steps>
+
+### Method 2: Manual Installation
+
+For more control over the setup process:
+
+<Steps>
+  <Step title="Install vinext and peer dependencies">
+    ```bash
+    npm install vinext react@^19.2.0 react-dom@^19.2.0 vite@^7.0.0
+    ```
+  </Step>
+
+  <Step title="Update package.json">
+    Add `"type": "module"` to enable ESM:
+
+    ```json package.json
+    {
+      "type": "module",
+      "scripts": {
+        "dev": "vinext dev",
+        "build": "vinext build",
+        "start": "vinext start"
+      }
+    }
+    ```
+  </Step>
+
+  <Step title="Create vite.config.ts (App Router only)">
+    If your project uses the App Router (`app/` directory), create a `vite.config.ts`:
+
+    ```ts vite.config.ts
+    import { defineConfig } from "vite";
+    import vinext from "vinext";
+    import rsc from "@vitejs/plugin-rsc";
+
+    export default defineConfig({
+      plugins: [
+        vinext(),
+        rsc({
+          entries: {
+            rsc: "virtual:vinext-rsc-entry",
+            ssr: "virtual:vinext-app-ssr-entry",
+            client: "virtual:vinext-app-browser-entry",
+          },
+        }),
+      ],
+    });
+    ```
+
+    <Note>
+      For Pages Router projects, no `vite.config.ts` is needed. vinext auto-configures everything.
+    </Note>
+  </Step>
+
+  <Step title="Handle CJS config files">
+    If you have CommonJS config files (like `postcss.config.js`), rename them to `.cjs` to avoid conflicts:
+
+    ```bash
+    mv postcss.config.js postcss.config.cjs
+    mv tailwind.config.js tailwind.config.cjs
+    ```
+  </Step>
+</Steps>
+
+## Configuration
+
+### Basic Configuration
+
+For most projects, no `vite.config.ts` is required. vinext auto-detects your project structure and configures Vite automatically.
+
+If you need custom Vite configuration:
+
+```ts vite.config.ts
+import { defineConfig } from "vite";
+import vinext from "vinext";
+
+export default defineConfig({
+  plugins: [vinext()],
+  // Your custom Vite config
+  server: {
+    port: 3000,
+  },
+  resolve: {
+    alias: {
+      "@": "/src",
+    },
+  },
+});
+```
+
+### App Router Configuration
+
+For App Router projects with React Server Components:
+
+```ts vite.config.ts
+import { defineConfig } from "vite";
+import vinext from "vinext";
+import rsc from "@vitejs/plugin-rsc";
+
+export default defineConfig({
+  plugins: [
+    vinext(),
+    rsc({
+      entries: {
+        rsc: "virtual:vinext-rsc-entry",
+        ssr: "virtual:vinext-app-ssr-entry",
+        client: "virtual:vinext-app-browser-entry",
+      },
+    }),
+  ],
+});
+```
+
+### Cloudflare Workers Configuration
+
+For deployment to Cloudflare Workers, add the Cloudflare Vite plugin:
+
+```ts vite.config.ts
+import { defineConfig } from "vite";
+import vinext from "vinext";
+import rsc from "@vitejs/plugin-rsc";
+import { cloudflare } from "@cloudflare/vite-plugin";
+
+export default defineConfig({
+  plugins: [
+    vinext(),
+    rsc({
+      entries: {
+        rsc: "virtual:vinext-rsc-entry",
+        ssr: "virtual:vinext-app-ssr-entry",
+        client: "virtual:vinext-app-browser-entry",
+      },
+    }),
+    cloudflare({
+      viteEnvironment: { name: "rsc", childEnvironments: ["ssr"] },
+    }),
+  ],
+});
+```
+
+<Tip>
+  The `vinext deploy` command auto-generates this configuration if it doesn't exist, so you don't need to create it manually unless you want custom settings.
+</Tip>
+
+## Migrating from Next.js
+
+### File Structure
+
+Your existing file structure works as-is:
+
+```
+my-app/
+├── app/              # App Router (if using)
+├── pages/            # Pages Router (if using)
+├── public/           # Static files
+├── next.config.js    # Next.js config (works with vinext)
+├── package.json
+└── tsconfig.json
+```
+
+No need to move or rename files!
+
+### next.config.js
+
+Your existing `next.config.js` (or `.ts`/`.mjs`) works with vinext. Most configuration options are supported:
+
+```js next.config.js
+export default {
+  reactStrictMode: true,
+  basePath: "/docs",
+  trailingSlash: true,
+  redirects: async () => [
+    {
+      source: "/old/:path*",
+      destination: "/new/:path*",
+      permanent: true,
+    },
+  ],
+  rewrites: async () => [
+    {
+      source: "/api/:path*",
+      destination: "https://api.example.com/:path*",
+    },
+  ],
+  images: {
+    domains: ["example.com"],
+  },
+};
+```
+
+<Warning>
+  webpack and Turbopack configuration options are ignored. Use Vite plugins instead.
+</Warning>
+
+### Environment Variables
+
+Environment variables work the same as in Next.js:
+
+```bash .env.local
+NEXT_PUBLIC_API_URL=https://api.example.com
+API_SECRET_KEY=secret123
+```
+
+- `NEXT_PUBLIC_*` variables are inlined at build time (client-side)
+- Other variables are available server-side only
+
+### TypeScript Configuration
+
+Your existing `tsconfig.json` works with vinext. Path aliases are automatically resolved via `vite-tsconfig-paths`:
+
+```json tsconfig.json
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"],
+      "@/components/*": ["./src/components/*"]
+    }
+  }
+}
+```
+
+## Deploying to Cloudflare Workers
+
+vinext makes it incredibly easy to deploy to Cloudflare Workers:
+
+<Steps>
+  <Step title="One-command deployment">
+    ```bash
+    vinext deploy
+    ```
+
+    This command automatically:
+    - Detects App Router or Pages Router
+    - Generates `wrangler.jsonc` and worker configuration
+    - Installs required dependencies
+    - Builds your application
+    - Deploys to Cloudflare Workers
+  </Step>
+
+  <Step title="Deploy to preview environment">
+    Test your deployment in a preview environment:
+
+    ```bash
+    vinext deploy --preview
+    ```
+  </Step>
+
+  <Step title="Custom Worker name">
+    Deploy with a custom name:
+
+    ```bash
+    vinext deploy --name my-custom-name
+    ```
+  </Step>
+</Steps>
+
+### Deploy Options
+
+<CodeGroup>
+```bash Production Deploy
+vinext deploy
+```
+
+```bash Preview Deploy
+vinext deploy --preview
+```
+
+```bash Custom Name
+vinext deploy --name my-app
+```
+
+```bash Skip Build
+vinext deploy --skip-build
+```
+
+```bash Dry Run
+vinext deploy --dry-run
+```
+</CodeGroup>
+
+### Traffic-Aware Pre-Rendering (Experimental)
+
+TPR queries Cloudflare zone analytics at deploy time to find which pages actually get traffic, pre-renders only those, and uploads them to KV cache:
+
+```bash
+vinext deploy --experimental-tpr
+```
+
+**Advanced TPR options:**
+
+<CodeGroup>
+```bash Default (90% coverage)
+vinext deploy --experimental-tpr
+```
+
+```bash Higher Coverage
+vinext deploy --experimental-tpr --tpr-coverage 95
+```
+
+```bash Limited Pages
+vinext deploy --experimental-tpr --tpr-limit 500
+```
+
+```bash Custom Time Window
+vinext deploy --experimental-tpr --tpr-window 48
+```
+</CodeGroup>
+
+<Warning>
+  TPR requires:
+  - A custom domain (zone analytics unavailable on `*.workers.dev`)
+  - `CLOUDFLARE_API_TOKEN` environment variable with Zone.Analytics read permission
+</Warning>
+
+## Caching with Cloudflare KV
+
+For production ISR caching, use the built-in KV cache handler:
+
+```ts app/layout.tsx
+import { KVCacheHandler } from "vinext/cloudflare";
+import { setCacheHandler } from "next/cache";
+
+// This should be called once during app initialization
+export function register() {
+  if (typeof env !== "undefined" && env.MY_KV_NAMESPACE) {
+    setCacheHandler(new KVCacheHandler(env.MY_KV_NAMESPACE));
+  }
+}
+```
+
+Make sure to bind a KV namespace in `wrangler.jsonc`:
+
+```json wrangler.jsonc
+{
+  "name": "my-app",
+  "main": "vinext/server/app-router-entry",
+  "compatibility_date": "2024-01-01",
+  "kv_namespaces": [
+    {
+      "binding": "MY_KV_NAMESPACE",
+      "id": "your-kv-namespace-id"
+    }
+  ]
+}
+```
+
+## Compatibility Checking
+
+Before fully committing to vinext, check your project for compatibility:
+
+```bash
+vinext check
+```
+
+This produces a detailed report showing:
+- ✅ Supported features you're using
+- 🟡 Partially supported features
+- ❌ Unsupported features that need attention
+
+### Example Output
+
+```
+vinext check
+
+Scanning project...
+
+✓ Imports
+  ✅ next/link
+  ✅ next/navigation (usePathname, useRouter)
+  ✅ next/headers (cookies, headers)
+  🟡 next/image (local image optimization unavailable)
+
+✓ Routing
+  ✅ App Router detected
+  ✅ Dynamic routes: [id].tsx
+  ✅ Catch-all routes: [...slug].tsx
+
+✓ Features
+  ✅ Server Components
+  ✅ Server Actions
+  ✅ Middleware
+  ❌ Turbopack (not supported, will use Vite)
+
+✓ Configuration (next.config.js)
+  ✅ redirects
+  ✅ rewrites
+  ✅ basePath
+  🟡 images.domains (parsed but not used for optimization)
+
+Compatibility: 94% (47/50 features supported)
+```
+
+## Advanced Configuration
+
+### Custom Vite Plugins
+
+Add any Vite plugins you need:
+
+```ts vite.config.ts
+import { defineConfig } from "vite";
+import vinext from "vinext";
+import react from "@vitejs/plugin-react";
+
+export default defineConfig({
+  plugins: [
+    vinext(),
+    react({
+      // React plugin options
+    }),
+  ],
+});
+```
+
+### MDX Support
+
+For MDX support (e.g., with Nextra), add the MDX plugin:
+
+```ts vite.config.ts
+import { defineConfig } from "vite";
+import vinext from "vinext";
+import mdx from "@mdx-js/rollup";
+
+export default defineConfig({
+  plugins: [
+    vinext(),
+    mdx(),
+  ],
+});
+```
+
+<Tip>
+  The `vinext deploy` command auto-detects MDX usage and configures it automatically.
+</Tip>
+
+### Path Aliases
+
+Path aliases from your `tsconfig.json` are automatically resolved. No additional configuration needed!
+
+```json tsconfig.json
+{
+  "compilerOptions": {
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  }
+}
+```
+
+Use them in your code:
+
+```tsx
+import { Button } from "@/components/Button";
+```
+
+## Troubleshooting
+
+### Dual Package Hazard
+
+If you see "Invalid hook call" errors or React warnings about multiple React copies:
+
+```ts vite.config.ts
+import { defineConfig } from "vite";
+import vinext from "vinext";
+
+export default defineConfig({
+  plugins: [vinext()],
+  resolve: {
+    dedupe: [
+      "react",
+      "react-dom",
+      "react/jsx-runtime",
+      "react/jsx-dev-runtime",
+    ],
+  },
+});
+```
+
+### ESM/CJS Conflicts
+
+If you see errors like "require() of ES Module not supported":
+
+1. Add `"type": "module"` to `package.json`
+2. Rename `.js` config files to `.cjs` (e.g., `postcss.config.cjs`)
+3. Use `export default` instead of `module.exports` in config files
+
+### Native Node Modules
+
+Some packages (sharp, resvg, satori, lightningcss, @napi-rs/canvas) crash Vite's RSC dev environment. These are auto-stubbed during `vinext deploy`.
+
+For local development, dynamic OG image routes using these packages work in production builds but not in dev mode.
+
+### TypeScript Errors
+
+If you see TypeScript errors about missing types:
+
+```bash
+npm install -D @types/react @types/react-dom @types/node
+```
+
+### Build Failures
+
+If your build fails:
+
+1. Check that you have all peer dependencies installed
+2. For App Router, ensure `@vitejs/plugin-rsc` is installed
+3. Run `vinext check` to identify compatibility issues
+4. Check the build output for specific error messages
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="CLI Reference" icon="terminal" href="/introduction#cli-commands">
+    Explore all vinext CLI commands
+  </Card>
+  <Card title="API Coverage" icon="check" href="/introduction#api-coverage">
+    See what Next.js features are supported
+  </Card>
+  <Card title="Live Examples" icon="globe" href="/introduction#live-examples">
+    Browse deployed examples on Cloudflare Workers
+  </Card>
+  <Card title="GitHub Repository" icon="github" href="https://github.com/cloudflare/vinext">
+    View the source code and contribute
+  </Card>
+</CardGroup>

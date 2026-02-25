@@ -1,0 +1,505 @@
+---
+title: vinext init
+description: Migrate an existing Next.js project to run under vinext
+---
+
+Migrates an existing Next.js project to vinext with a one-command setup. Installs dependencies, configures ESM, generates `vite.config.ts`, and adds npm scripts.
+
+## Usage
+
+```bash
+vinext init [options]
+```
+
+## Options
+
+<ParamField path="--port" type="number" default="3001">
+  Dev server port for the vinext script. Can also use the short form `-p`.
+  
+  ```bash
+  vinext init --port 4000
+  ```
+  
+  Creates a `dev:vinext` script that runs on this port (Next.js dev continues to use port 3000).
+</ParamField>
+
+<ParamField path="--skip-check" type="flag">
+  Skip the compatibility check step.
+  
+  ```bash
+  vinext init --skip-check
+  ```
+  
+  By default, vinext runs a compatibility scan before migration. Use this to skip it.
+</ParamField>
+
+<ParamField path="--force" type="flag">
+  Overwrite existing `vite.config.ts` if it exists.
+  
+  ```bash
+  vinext init --force
+  ```
+  
+  By default, vinext skips config generation if `vite.config.ts` already exists.
+</ParamField>
+
+<ParamField path="--help" type="flag">
+  Show help for this command. Can also use `-h`.
+  
+  ```bash
+  vinext init --help
+  ```
+</ParamField>
+
+## What It Does
+
+The init command automates project migration:
+
+```typescript
+// From init.ts:157-257
+export async function init(options: InitOptions): Promise<InitResult> {
+  // 1. Run compatibility check (shows what will/won't work)
+  if (!options.skipCheck) {
+    const checkResult = runCheck(root);
+    console.log(formatReport(checkResult));
+  }
+  
+  // 2. Install dependencies
+  const neededDeps = getInitDeps(isApp);
+  const missingDeps = neededDeps.filter(dep => !isDepInstalled(root, dep));
+  if (missingDeps.length > 0) {
+    installDeps(root, missingDeps);
+  }
+  
+  // 3. Add "type": "module" to package.json
+  const renamedConfigs = renameCJSConfigs(root);
+  const addedTypeModule = ensureESModule(root);
+  
+  // 4. Add scripts to package.json
+  const addedScripts = addScripts(root, port);
+  
+  // 5. Generate vite.config.ts
+  if (!viteConfigExists || options.force) {
+    const configContent = generateViteConfig(isApp);
+    fs.writeFileSync("vite.config.ts", configContent);
+  }
+  
+  // 6. Print summary
+  console.log("vinext init complete!");
+}
+```
+
+### 1. Compatibility Check
+
+Scans your project and shows a compatibility report:
+
+```bash
+vinext init
+
+  Running compatibility check...
+
+  vinext compatibility report
+  ========================================
+
+  Imports: 8/10 fully supported
+    ✓  next/link
+    ✓  next/navigation
+    ~  next/image — uses @unpic/react (no local optimization yet)
+    ✗  next/amp — AMP is not supported
+
+  Config: 5/6 options supported
+    ✓  redirects
+    ✓  rewrites
+    ✗  webpack — Vite replaces webpack
+
+  Libraries: 3/3 compatible
+    ✓  next-themes
+    ✓  tailwindcss
+    ✓  zod
+
+  Project structure:
+    ✓  App Router (app/)
+    ✓  15 page(s)
+    ✓  3 layout(s)
+    ✗  Missing "type": "module" in package.json — required for Vite
+
+  ────────────────────────────────────────
+  Overall: 85% compatible (20 supported, 2 partial, 2 issues)
+```
+
+See the [check command](/api/cli/check) for details on what's checked.
+
+### 2. Dependency Installation
+
+Installs required packages:
+
+<CodeGroup>
+```bash App Router
+# Installs: vinext, vite, @vitejs/plugin-rsc
+npm install -D vinext vite @vitejs/plugin-rsc
+```
+
+```bash Pages Router
+# Installs: vinext, vite
+npm install -D vinext vite
+```
+</CodeGroup>
+
+```typescript
+// From init.ts:115-121
+export function getInitDeps(isAppRouter: boolean): string[] {
+  const deps = ["vinext", "vite"];
+  if (isAppRouter) {
+    deps.push("@vitejs/plugin-rsc");
+  }
+  return deps;
+}
+```
+
+### 3. ESM Configuration
+
+Vite requires ESM. vinext automatically:
+
+1. **Renames CJS config files** to `.cjs` extension:
+   - `next.config.js` → `next.config.cjs`
+   - `postcss.config.js` → `postcss.config.cjs`
+   - `tailwind.config.js` → `tailwind.config.cjs`
+
+2. **Adds `"type": "module"` to package.json**:
+
+```json
+{
+  "name": "my-app",
+  "version": "1.0.0",
+  "type": "module",  // Added by vinext init
+  "scripts": { /* ... */ }
+}
+```
+
+<Warning>
+After adding `"type": "module"`, `.js` files are treated as ESM. If you have CommonJS files, rename them to `.cjs` or convert to ESM.
+</Warning>
+
+### 4. Script Addition
+
+Adds vinext scripts to `package.json` without overwriting existing ones:
+
+```json
+{
+  "scripts": {
+    "dev": "next dev",              // Unchanged (Next.js still works)
+    "dev:vinext": "vite dev --port 3001",  // Added
+    "build": "next build",          // Unchanged
+    "build:vinext": "vite build",   // Added
+    "start": "next start"
+  }
+}
+```
+
+You can now run:
+
+```bash
+npm run dev         # Next.js dev server (port 3000)
+npm run dev:vinext  # vinext dev server (port 3001)
+```
+
+### 5. Config Generation
+
+Generates a minimal `vite.config.ts`:
+
+```typescript
+// From init.ts:63-70
+export function generateViteConfig(_isAppRouter: boolean): string {
+  return `import vinext from "vinext";
+import { defineConfig } from "vite";
+
+export default defineConfig({
+  plugins: [vinext()],
+});
+`;
+}
+```
+
+The `vinext()` plugin auto-detects App Router and registers `@vitejs/plugin-rsc` if needed.
+
+<Note>
+If `vite.config.ts` already exists, vinext skips generation unless you use `--force`.
+</Note>
+
+## Examples
+
+### Basic Migration
+
+Migrate with all defaults:
+
+```bash
+vinext init
+```
+
+Output:
+```
+  Running compatibility check...
+
+  [compatibility report]
+
+  Installing vinext, vite, @vitejs/plugin-rsc...
+
+  vinext init complete!
+
+    ✓ Added vinext, vite, @vitejs/plugin-rsc to devDependencies
+    ✓ Added "type": "module" to package.json
+    ✓ Renamed next.config.js → next.config.cjs
+    ✓ Added dev:vinext script
+    ✓ Added build:vinext script
+    ✓ Generated vite.config.ts
+
+  Next steps:
+    npm run dev:vinext    Start the vinext dev server
+    npm run dev           Start Next.js (still works as before)
+```
+
+### Custom Port
+
+Use a different dev server port:
+
+```bash
+vinext init --port 4000
+```
+
+Creates:
+
+```json
+{
+  "scripts": {
+    "dev:vinext": "vite dev --port 4000"
+  }
+}
+```
+
+### Skip Compatibility Check
+
+Skip the check if you've already run `vinext check`:
+
+```bash
+vinext check        # Run check separately
+vinext init --skip-check
+```
+
+### Force Overwrite Config
+
+Overwrite existing `vite.config.ts`:
+
+```bash
+vinext init --force
+```
+
+<Warning>
+This will replace your existing `vite.config.ts`. Back it up first if you have custom configuration.
+</Warning>
+
+## Non-Destructive Migration
+
+vinext init is **non-destructive**:
+
+- **Does NOT modify**: `next.config.*`, `tsconfig.json`, source files
+- **Does NOT remove**: Next.js dependencies or scripts
+- **Safe to run**: Your Next.js setup continues to work
+
+You can run both Next.js and vinext side-by-side:
+
+```bash
+# Terminal 1: Next.js
+npm run dev
+
+# Terminal 2: vinext
+npm run dev:vinext
+```
+
+## After Migration
+
+### Start Development Server
+
+```bash
+npm run dev:vinext
+```
+
+Or directly:
+
+```bash
+vinext dev
+```
+
+### Build for Production
+
+```bash
+npm run build:vinext
+```
+
+Or:
+
+```bash
+vinext build
+```
+
+### Deploy to Cloudflare Workers
+
+```bash
+vinext deploy
+```
+
+## Manual Migration Steps
+
+If you prefer manual setup:
+
+### 1. Install Dependencies
+
+<CodeGroup>
+```bash App Router
+npm install -D vinext vite @vitejs/plugin-rsc
+```
+
+```bash Pages Router
+npm install -D vinext vite
+```
+</CodeGroup>
+
+### 2. Add "type": "module"
+
+Edit `package.json`:
+
+```json
+{
+  "type": "module"
+}
+```
+
+### 3. Rename CJS Configs
+
+```bash
+mv next.config.js next.config.cjs
+mv postcss.config.js postcss.config.cjs
+```
+
+### 4. Create vite.config.ts
+
+```typescript
+import { defineConfig } from 'vite'
+import vinext from 'vinext'
+
+export default defineConfig({
+  plugins: [vinext()],
+})
+```
+
+### 5. Add Scripts
+
+Edit `package.json`:
+
+```json
+{
+  "scripts": {
+    "dev:vinext": "vite dev --port 3001",
+    "build:vinext": "vite build"
+  }
+}
+```
+
+### 6. Start Dev Server
+
+```bash
+npm run dev:vinext
+```
+
+## Troubleshooting
+
+### "Cannot use import statement outside a module"
+
+You have CommonJS files with `require()` statements. Either:
+
+1. Rename them to `.cjs`:
+   ```bash
+   mv some-file.js some-file.cjs
+   ```
+
+2. Or convert to ESM:
+   ```javascript
+   // Before (CommonJS)
+   const foo = require('./foo')
+   module.exports = { bar }
+   
+   // After (ESM)
+   import foo from './foo'
+   export { bar }
+   ```
+
+### "Module not found: @vitejs/plugin-rsc"
+
+For App Router projects, ensure the RSC plugin is installed:
+
+```bash
+npm install -D @vitejs/plugin-rsc
+```
+
+### vinext dev Fails on Port 3001
+
+Port is already in use. Use a different port:
+
+```bash
+vinext init --port 4000
+```
+
+Or change the script manually:
+
+```json
+{
+  "scripts": {
+    "dev:vinext": "vite dev --port 4000"
+  }
+}
+```
+
+### Type Errors After Migration
+
+Run TypeScript typecheck:
+
+```bash
+npx tsc --noEmit
+```
+
+Common issues:
+- Missing types: `npm install -D @types/node`
+- Vite types: Add to `tsconfig.json`:
+  ```json
+  {
+    "compilerOptions": {
+      "types": ["vite/client"]
+    }
+  }
+  ```
+
+## Rollback
+
+To remove vinext and go back to Next.js only:
+
+1. Remove vinext scripts from `package.json`
+2. Remove `"type": "module"` from `package.json`
+3. Rename configs back:
+   ```bash
+   mv next.config.cjs next.config.js
+   ```
+4. Remove dependencies:
+   ```bash
+   npm uninstall vinext vite @vitejs/plugin-rsc
+   ```
+5. Delete `vite.config.ts`
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="dev Command" icon="laptop-code" href="/api/cli/dev">
+    Start the development server
+  </Card>
+  <Card title="check Command" icon="clipboard-check" href="/api/cli/check">
+    Understand the compatibility report
+  </Card>
+</CardGroup>

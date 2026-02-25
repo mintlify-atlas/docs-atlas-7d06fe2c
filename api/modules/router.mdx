@@ -1,0 +1,415 @@
+---
+title: next/router
+description: Pages Router navigation and routing
+---
+
+The `next/router` module provides the Pages Router API, including the `useRouter` hook and default Router singleton for programmatic navigation.
+
+## Import
+
+```typescript
+import { useRouter } from 'next/router'
+import Router from 'next/router'
+```
+
+## useRouter Hook
+
+Returns a router instance with navigation methods and current route state.
+
+```tsx
+import { useRouter } from 'next/router'
+
+export default function Page() {
+  const router = useRouter()
+  
+  return (
+    <div>
+      <p>Current path: {router.pathname}</p>
+      <p>Query: {JSON.stringify(router.query)}</p>
+      <button onClick={() => router.push('/about')}>
+        Go to About
+      </button>
+    </div>
+  )
+}
+```
+
+## Router Object
+
+### Properties
+
+<ResponseField name="pathname" type="string">
+  Current pathname (without basePath or query).
+  
+  ```tsx
+  router.pathname  // "/blog/[slug]"
+  ```
+</ResponseField>
+
+<ResponseField name="route" type="string">
+  Current route pattern (with dynamic segments).
+  
+  ```tsx
+  router.route  // "/blog/[slug]"
+  ```
+</ResponseField>
+
+<ResponseField name="query" type="Record<string, string | string[]>">
+  Query parameters and dynamic route params.
+  
+  ```tsx
+  // URL: /blog/hello-world?author=john
+  router.query  // { slug: "hello-world", author: "john" }
+  ```
+</ResponseField>
+
+<ResponseField name="asPath" type="string">
+  Full URL path including query string.
+  
+  ```tsx
+  router.asPath  // "/blog/hello-world?author=john"
+  ```
+</ResponseField>
+
+<ResponseField name="basePath" type="string">
+  Configured base path from `next.config.js`.
+  
+  ```tsx
+  router.basePath  // "/docs" or ""
+  ```
+</ResponseField>
+
+<ResponseField name="locale" type="string | undefined">
+  Current locale (i18n).
+  
+  ```tsx
+  router.locale  // "en" or "fr"
+  ```
+</ResponseField>
+
+<ResponseField name="locales" type="string[] | undefined">
+  All configured locales.
+  
+  ```tsx
+  router.locales  // ["en", "fr", "de"]
+  ```
+</ResponseField>
+
+<ResponseField name="defaultLocale" type="string | undefined">
+  Default locale.
+  
+  ```tsx
+  router.defaultLocale  // "en"
+  ```
+</ResponseField>
+
+<ResponseField name="isReady" type="boolean">
+  Whether the router is ready (always `true` in vinext).
+  
+  ```tsx
+  if (router.isReady) {
+    // Router fields are populated
+  }
+  ```
+</ResponseField>
+
+<ResponseField name="isPreview" type="boolean">
+  Whether in preview mode (always `false` in vinext).
+</ResponseField>
+
+<ResponseField name="isFallback" type="boolean">
+  Whether the page is in fallback mode (ISR).
+</ResponseField>
+
+### Methods
+
+<ResponseField name="push" type="(url, as?, options?) => Promise<boolean>">
+  Navigate to a new URL (pushes history entry).
+  
+  ```tsx
+  await router.push('/about')
+  await router.push({ pathname: '/user/[id]', query: { id: '123' } })
+  await router.push('/post', undefined, { scroll: false })
+  await router.push('/', undefined, { locale: 'fr' })
+  ```
+  
+  **Parameters:**
+  - `url: string | UrlObject` — Destination
+  - `as?: string` — URL mask (legacy)
+  - `options?: { shallow?: boolean; scroll?: boolean; locale?: string }`
+  
+  **Returns:** `Promise<boolean>` — `true` on success
+</ResponseField>
+
+<ResponseField name="replace" type="(url, as?, options?) => Promise<boolean>">
+  Navigate to a new URL (replaces history entry).
+  
+  ```tsx
+  await router.replace('/login')
+  await router.replace('/dashboard', undefined, { shallow: true })
+  ```
+  
+  Same parameters as `push()`.
+</ResponseField>
+
+<ResponseField name="back" type="() => void">
+  Navigate to the previous page.
+  
+  ```tsx
+  <button onClick={() => router.back()}>Go Back</button>
+  ```
+</ResponseField>
+
+<ResponseField name="reload" type="() => void">
+  Hard reload the current page.
+  
+  ```tsx
+  <button onClick={() => router.reload()}>Reload</button>
+  ```
+</ResponseField>
+
+<ResponseField name="prefetch" type="(url: string) => Promise<void>">
+  Prefetch a page for faster navigation.
+  
+  ```tsx
+  <div onMouseEnter={() => router.prefetch('/dashboard')}>
+    Hover to prefetch
+  </div>
+  ```
+</ResponseField>
+
+<ResponseField name="beforePopState" type="(cb: BeforePopStateCallback) => void">
+  Register a callback to run before browser back/forward navigation.
+  
+  ```tsx
+  router.beforePopState(({ url, as, options }) => {
+    // Return false to prevent navigation
+    if (hasUnsavedChanges()) {
+      alert('You have unsaved changes!')
+      return false
+    }
+    return true
+  })
+  ```
+</ResponseField>
+
+<ResponseField name="events" type="RouterEvents">
+  Event emitter for route changes.
+  
+  ```tsx
+  useEffect(() => {
+    const handleStart = (url) => console.log('Navigating to', url)
+    const handleComplete = (url) => console.log('Navigated to', url)
+    
+    router.events.on('routeChangeStart', handleStart)
+    router.events.on('routeChangeComplete', handleComplete)
+    
+    return () => {
+      router.events.off('routeChangeStart', handleStart)
+      router.events.off('routeChangeComplete', handleComplete)
+    }
+  }, [])
+  ```
+  
+  **Events:**
+  - `routeChangeStart(url: string)` — Before navigation starts
+  - `routeChangeComplete(url: string)` — After navigation completes
+  - `routeChangeError(err: Error, url: string)` — On navigation error
+</ResponseField>
+
+## Router Singleton
+
+The default export provides a router singleton for use outside components:
+
+```typescript
+import Router from 'next/router'
+
+// Usage in utility functions
+export async function logout() {
+  await clearSession()
+  await Router.push('/login')
+}
+```
+
+Methods and events are identical to `useRouter()`.
+
+## UrlObject
+
+Construct URLs programmatically:
+
+```typescript
+interface UrlObject {
+  pathname?: string
+  query?: Record<string, string>
+}
+```
+
+```tsx
+router.push({
+  pathname: '/blog/[slug]',
+  query: { slug: 'hello-world', author: 'john' }
+})
+// Navigates to: /blog/hello-world?author=john
+```
+
+## Navigation Options
+
+```typescript
+interface TransitionOptions {
+  shallow?: boolean    // Update URL without re-fetching (deprecated)
+  scroll?: boolean     // Scroll to top after navigation (default: true)
+  locale?: string      // Navigate to a specific locale
+}
+```
+
+### Shallow Routing
+
+Update the URL without triggering a full page navigation:
+
+```tsx
+router.push('/?filter=tech', undefined, { shallow: true })
+```
+
+<Warning>
+  **Deprecated in App Router** — Use `window.history.pushState()` instead.
+</Warning>
+
+### Scroll Control
+
+```tsx
+// Don't scroll to top (stay at current position)
+router.push('/page', undefined, { scroll: false })
+```
+
+## Route Events
+
+Listen for navigation events:
+
+```tsx
+import { useEffect } from 'react'
+import { useRouter } from 'next/router'
+
+export default function Page() {
+  const router = useRouter()
+  
+  useEffect(() => {
+    function handleRouteChange(url) {
+      console.log('App is changing to: ', url)
+    }
+    
+    router.events.on('routeChangeComplete', handleRouteChange)
+    
+    return () => {
+      router.events.off('routeChangeComplete', handleRouteChange)
+    }
+  }, [router.events])
+  
+  return <div>Page content</div>
+}
+```
+
+### Available Events
+
+- **routeChangeStart(url)** — Fires before navigation
+- **routeChangeComplete(url)** — Fires after navigation succeeds
+- **routeChangeError(err, url)** — Fires on navigation error
+
+## Hash Navigation
+
+Navigate to hash links:
+
+```tsx
+router.push('#section-2')
+router.push('/page#section-2')
+```
+
+Scroll to the target element automatically.
+
+## External URLs
+
+External URLs trigger full page navigation:
+
+```tsx
+router.push('https://example.com')
+// Same as: window.location.href = 'https://example.com'
+```
+
+## Dynamic Routes
+
+Access dynamic route parameters via `router.query`:
+
+```tsx
+// File: pages/blog/[slug].tsx
+import { useRouter } from 'next/router'
+
+export default function Post() {
+  const router = useRouter()
+  const { slug } = router.query
+  
+  return <h1>Post: {slug}</h1>
+}
+```
+
+### Catch-All Routes
+
+```tsx
+// File: pages/docs/[...slug].tsx
+export default function Docs() {
+  const router = useRouter()
+  const { slug } = router.query
+  // slug is an array: ["getting-started", "installation"]
+  
+  return <div>Path: {slug?.join('/')}</div>
+}
+```
+
+## i18n Routing
+
+Navigate with locale support:
+
+```tsx
+router.push('/', undefined, { locale: 'fr' })
+router.push('/', undefined, { locale: false })  // Use default locale
+```
+
+## basePath Support
+
+If `basePath` is configured, it's automatically handled:
+
+```javascript
+// next.config.js
+module.exports = { basePath: '/docs' }
+```
+
+```tsx
+router.push('/api')  // Navigates to /docs/api
+router.pathname      // Returns /api (without basePath)
+```
+
+## Limitations
+
+<Warning>
+  **Server-side routing**: `useRouter` can only be called in client components. Use `getServerSideProps` to read route params on the server.
+</Warning>
+
+<Warning>
+  **Shallow routing**: Only updates `query` and `asPath`. Full page navigation still occurs if the route pattern changes.
+</Warning>
+
+## Migration to App Router
+
+App Router equivalents:
+
+| Pages Router | App Router |
+|--------------|------------|
+| `useRouter()` | `useRouter()` (next/navigation) |
+| `router.pathname` | `usePathname()` |
+| `router.query` | `useSearchParams()` |
+| `router.push()` | `router.push()` |
+| `router.back()` | `router.back()` |
+
+## Source
+
+[View source code →](https://github.com/stackblitz/vinext/blob/main/packages/vinext/src/shims/router.ts)
+
+Implementation: `/home/daytona/workspace/source/packages/vinext/src/shims/router.ts`

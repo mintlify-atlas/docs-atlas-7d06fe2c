@@ -1,0 +1,407 @@
+---
+title: Image Optimization
+description: On-the-fly image resizing and transcoding with Cloudflare Images
+---
+
+# Image Optimization
+
+vinext uses Cloudflare Images for on-the-fly image resizing and format transcoding in production. Images are optimized at the edge with zero build-time processing.
+
+## How It Works
+
+When using `next/image`, vinext:
+
+1. Generates an optimization URL: `/_vinext/image?url=/photo.jpg&w=800&q=75`
+2. Fetches the source image from the ASSETS binding
+3. Transforms via Cloudflare Images (resize, transcode, compress)
+4. Returns optimized image with `Cache-Control: public, max-age=31536000, immutable`
+
+No build-time optimization or static resizing occurs.
+
+## Setup
+
+### Automatic Setup (vinext deploy)
+
+`vinext deploy` configures everything automatically:
+
+```bash
+vinext deploy
+```
+
+This generates:
+- ASSETS binding in `wrangler.jsonc`
+- IMAGES binding in `wrangler.jsonc`
+- Worker entry with image optimization handler
+
+### Manual Setup
+
+#### 1. Configure wrangler.jsonc
+
+```jsonc filename="wrangler.jsonc"
+{
+  "name": "my-app",
+  "main": "worker/index.ts",
+  "assets": {
+    "directory": "dist/client",
+    "binding": "ASSETS",
+    "not_found_handling": "none"
+  },
+  "images": {
+    "binding": "IMAGES"
+  }
+}
+```
+
+#### 2. Create Worker Entry
+
+```ts filename="worker/index.ts"
+import { handleImageOptimization } from 'vinext/server/image-optimization'
+import handler from 'vinext/server/app-router-entry'
+
+interface Env {
+  ASSETS: Fetcher
+  IMAGES: {
+    input(stream: ReadableStream): {
+      transform(options: Record<string, unknown>): {
+        output(options: { format: string; quality: number }): Promise<{ response(): Response }>
+      }
+    }
+  }
+}
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url)
+    
+    if (url.pathname === '/_vinext/image') {
+      return handleImageOptimization(request, {
+        fetchAsset: (path) => env.ASSETS.fetch(new Request(new URL(path, request.url))),
+        transformImage: async (body, { width, format, quality }) => {
+          const result = await env.IMAGES.input(body)
+            .transform(width > 0 ? { width } : {})
+            .output({ format, quality })
+          return result.response()
+        }
+      })
+    }
+    
+    return handler.fetch(request)
+  }
+}
+```
+
+## API Reference
+
+### handleImageOptimization
+
+```ts
+handleImageOptimization(
+  request: Request,
+  handlers: ImageHandlers
+): Promise<Response>
+```
+
+Handles image optimization requests.
+
+#### Parameters
+
+**`request`** (required)  
+Type: `Request`  
+Incoming image optimization request.
+
+**`handlers`** (required)  
+Type: `ImageHandlers`  
+Callbacks for fetching and transforming images.
+
+```ts
+interface ImageHandlers {
+  fetchAsset: (path: string, request: Request) => Promise<Response>
+  transformImage?: (
+    body: ReadableStream,
+    options: { width: number; format: string; quality: number }
+  ) => Promise<Response>
+}
+```
+
+**`handlers.fetchAsset`**  
+Fetch the source image. Typically delegates to `env.ASSETS.fetch()`.
+
+**`handlers.transformImage`** (optional)  
+Transform the image. Omit for passthrough (serves original).
+
+#### Returns
+
+`Promise<Response>` - Optimized image response with cache headers.
+
+### parseImageParams
+
+```ts
+parseImageParams(url: URL): { imageUrl: string; width: number; quality: number } | null
+```
+
+Parses and validates image optimization query parameters.
+
+#### Query Parameters
+
+**`url`** (required)  
+Type: `string`  
+Source image path. Must be path-relative (starts with `/`, not `//`).
+
+**`w`** (required)  
+Type: `number`  
+Target width in pixels. `0` = no resize.
+
+**`q`** (optional)  
+Type: `number`  
+Default: `75`  
+Quality (1-100).
+
+#### Example
+
+```ts
+const url = new URL('https://example.com/_vinext/image?url=/photo.jpg&w=800&q=75')
+const params = parseImageParams(url)
+// { imageUrl: '/photo.jpg', width: 800, quality: 75 }
+```
+
+### negotiateImageFormat
+
+```ts
+negotiateImageFormat(acceptHeader: string | null): string
+```
+
+Negotiates the best output format based on the `Accept` header.
+
+#### Returns
+
+- `'image/avif'` if `Accept` includes `image/avif`
+- `'image/webp'` if `Accept` includes `image/webp`
+- `'image/jpeg'` otherwise
+
+#### Example
+
+```ts
+const format = negotiateImageFormat('image/avif,image/webp,*/*')
+// 'image/avif'
+```
+
+## Constants
+
+### IMAGE_OPTIMIZATION_PATH
+
+```ts
+const IMAGE_OPTIMIZATION_PATH = '/_vinext/image'
+```
+
+The pathname that triggers image optimization.
+
+### IMAGE_CACHE_CONTROL
+
+```ts
+const IMAGE_CACHE_CONTROL = 'public, max-age=31536000, immutable'
+```
+
+Standard `Cache-Control` header for optimized images. Optimized images are immutable because the URL encodes the transform params.
+
+## Usage in Components
+
+Use `next/image` normally:
+
+```tsx filename="app/page.tsx"
+import Image from 'next/image'
+
+export default function Page() {
+  return (
+    <Image
+      src="/photo.jpg"
+      alt="Photo"
+      width={800}
+      height={600}
+      quality={75}
+    />
+  )
+}
+```
+
+vinext automatically generates optimization URLs:
+
+```html
+<img
+  src="/_vinext/image?url=%2Fphoto.jpg&w=800&q=75"
+  srcset="
+    /_vinext/image?url=%2Fphoto.jpg&w=640&q=75 640w,
+    /_vinext/image?url=%2Fphoto.jpg&w=750&q=75 750w,
+    /_vinext/image?url=%2Fphoto.jpg&w=828&q=75 828w
+  "
+  width="800"
+  height="600"
+  alt="Photo"
+/>
+```
+
+## Remote Images
+
+Remote images work via [@unpic/react](https://unpic.pics) which auto-detects 28 CDN providers:
+
+```tsx filename="app/page.tsx"
+import Image from 'next/image'
+
+export default function Page() {
+  return (
+    <Image
+      src="https://cdn.example.com/photo.jpg"
+      alt="Photo"
+      width={800}
+      height={600}
+    />
+  )
+}
+```
+
+Configure allowed patterns in `next.config.js`:
+
+```ts filename="next.config.ts"
+export default {
+  images: {
+    remotePatterns: [
+      {
+        protocol: 'https',
+        hostname: 'cdn.example.com',
+        pathname: '/images/**'
+      }
+    ]
+  }
+}
+```
+
+## Format Negotiation
+
+The handler automatically serves the best format based on the `Accept` header:
+
+- **AVIF** (smallest, newer browsers)
+- **WebP** (smaller, wide support)
+- **JPEG** (fallback)
+
+Cloudflare's edge cache stores one variant per format, so the same image URL can return different formats to different clients.
+
+## Security
+
+### Path Validation
+
+Only path-relative URLs are allowed. This prevents:
+
+- **Open redirect:** `?url=https://evil.com/phishing`
+- **SSRF:** `?url=http://internal-service/admin`
+- **Protocol smuggling:** `?url=data:image/svg+xml,...`
+
+Valid:
+- `?url=/photo.jpg`
+- `?url=/images/profile.png`
+
+Invalid (returns 400):
+- `?url=https://example.com/photo.jpg`
+- `?url=//example.com/photo.jpg`
+- `?url=data:image/svg+xml,...`
+
+### Width/Quality Limits
+
+The handler validates:
+
+- **Width:** Must be `>= 0`. `0` = no resize.
+- **Quality:** Must be `1-100`.
+
+Invalid values return `400 Bad Request`.
+
+## Fallback Behavior
+
+If `transformImage` is omitted or throws an error, the handler serves the original image with cache headers:
+
+```ts
+return handleImageOptimization(request, {
+  fetchAsset: (path) => env.ASSETS.fetch(new Request(new URL(path, request.url)))
+  // No transformImage — serves original
+})
+```
+
+This is useful for:
+
+- Development server (no Images binding)
+- Non-Cloudflare deployments
+- Debugging
+
+## Development vs Production
+
+### Development
+
+In dev mode, images are served as passthroughs (no optimization). The `transformImage` callback is omitted:
+
+```ts
+if (url.pathname === '/_vinext/image') {
+  return handleImageOptimization(request, {
+    fetchAsset: (path) => {
+      // Serve from public/ directory
+      return fetch(new URL(path, 'http://localhost:5173'))
+    }
+  })
+}
+```
+
+### Production
+
+In production on Workers, images are optimized via Cloudflare Images:
+
+```ts
+if (url.pathname === '/_vinext/image') {
+  return handleImageOptimization(request, {
+    fetchAsset: (path) => env.ASSETS.fetch(new Request(new URL(path, request.url))),
+    transformImage: async (body, { width, format, quality }) => {
+      const result = await env.IMAGES.input(body)
+        .transform(width > 0 ? { width } : {})
+        .output({ format, quality })
+      return result.response()
+    }
+  })
+}
+```
+
+## Example: Custom Watermarking
+
+Add custom image processing logic:
+
+```ts filename="worker/index.ts"
+if (url.pathname === '/_vinext/image') {
+  return handleImageOptimization(request, {
+    fetchAsset: (path) => env.ASSETS.fetch(new Request(new URL(path, request.url))),
+    transformImage: async (body, { width, format, quality }) => {
+      // Add watermark
+      const result = await env.IMAGES.input(body)
+        .transform(width > 0 ? { width } : {})
+        .draw([
+          {
+            url: 'https://example.com/watermark.png',
+            bottom: 10,
+            right: 10,
+            opacity: 0.5
+          }
+        ])
+        .output({ format, quality })
+      return result.response()
+    }
+  })
+}
+```
+
+See [Cloudflare Images API](https://developers.cloudflare.com/images/transform-images/) for transform options.
+
+## Limitations
+
+- **No build-time optimization:** Images are optimized at request time, not build time
+- **No static resizing:** `next export` doesn't pre-generate responsive variants
+- **No blur placeholders:** `placeholder="blur"` is not supported
+- **No `sizes` auto-detection:** You must provide the `sizes` prop manually for responsive images
+
+## Related
+
+- [next/image](/api/components/image) - Image component reference
+- [Cloudflare Bindings](/api/cloudflare/bindings) - Access ASSETS, IMAGES, and other bindings
+- [Cloudflare Images](https://developers.cloudflare.com/images/) - Official Cloudflare Images docs

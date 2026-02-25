@@ -1,0 +1,401 @@
+---
+title: Migrating from Next.js
+description: Complete guide to migrating your Next.js application to vinext
+---
+
+# Migrating from Next.js
+
+vinext reimplements the Next.js API surface on Vite, allowing you to run existing Next.js applications with a different toolchain. This guide covers both automated and manual migration approaches.
+
+## Automated Migration
+
+The fastest way to migrate is using `vinext init`, which automates all migration steps:
+
+<CodeGroup>
+```bash npm
+npx vinext init
+```
+
+```bash pnpm
+pnpm dlx vinext init
+```
+
+```bash yarn
+yarn dlx vinext init
+```
+</CodeGroup>
+
+### What `vinext init` Does
+
+<Steps>
+  <Step title="Compatibility Check">
+    Runs `vinext check` to scan your project for compatibility issues and provides a detailed report of supported and unsupported features.
+  </Step>
+
+  <Step title="Install Dependencies">
+    Installs required dependencies based on your router type:
+    - `vite` (always required)
+    - `@vitejs/plugin-rsc` (for App Router projects)
+    - `vinext` (the main plugin)
+  </Step>
+
+  <Step title="ESM Configuration">
+    Adds `"type": "module"` to your `package.json` and renames CommonJS config files to `.cjs` extension to avoid conflicts:
+    - `postcss.config.js` → `postcss.config.cjs`
+    - `tailwind.config.js` → `tailwind.config.cjs`
+  </Step>
+
+  <Step title="Add Scripts">
+    Adds vinext scripts to `package.json` alongside your existing Next.js scripts:
+    ```json
+    {
+      "scripts": {
+        "dev": "next dev",
+        "dev:vinext": "vite dev --port 3001",
+        "build": "next build",
+        "build:vinext": "vite build"
+      }
+    }
+    ```
+  </Step>
+
+  <Step title="Generate Vite Config">
+    Creates a minimal `vite.config.ts` with the vinext plugin:
+    ```typescript
+    import vinext from "vinext";
+    import { defineConfig } from "vite";
+
+    export default defineConfig({
+      plugins: [vinext()],
+    });
+    ```
+  </Step>
+</Steps>
+
+### Migration Options
+
+```bash
+npx vinext init --port 3001      # Custom dev server port (default: 3001)
+npx vinext init --skip-check     # Skip compatibility check
+npx vinext init --force          # Overwrite existing vite.config.ts
+```
+
+### Non-Destructive Migration
+
+The migration is **completely non-destructive**:
+- Your existing Next.js setup continues to work
+- `next.config.js`, `tsconfig.json`, and source files are not modified
+- Next.js dependencies are not removed
+- Both toolchains can run side-by-side
+
+```bash
+npm run dev         # Still runs Next.js as before
+npm run dev:vinext  # Runs vinext dev server
+```
+
+## Manual Migration
+
+If you prefer manual setup or need more control:
+
+<Steps>
+  <Step title="Install vinext">
+    <CodeGroup>
+    ```bash npm
+    npm install vinext
+    ```
+
+    ```bash pnpm
+    pnpm add vinext
+    ```
+
+    ```bash yarn
+    yarn add vinext
+    ```
+    </CodeGroup>
+  </Step>
+
+  <Step title="Update package.json">
+    Replace Next.js commands with vinext:
+    ```json
+    {
+      "scripts": {
+        "dev": "vinext dev",
+        "build": "vinext build",
+        "start": "vinext start"
+      }
+    }
+    ```
+  </Step>
+
+  <Step title="Run Compatibility Check">
+    Before starting development, check for compatibility issues:
+    ```bash
+    npx vinext check
+    ```
+
+    This scans your codebase and reports:
+    - Supported features currently in use
+    - Unsupported features that may cause issues
+    - Recommended migration steps
+  </Step>
+
+  <Step title="Start Development">
+    Run the dev server with hot module replacement:
+    ```bash
+    vinext dev
+    ```
+
+    vinext auto-detects your `app/` or `pages/` directory and loads your `next.config.js` automatically.
+  </Step>
+</Steps>
+
+## Compatibility Check
+
+The `vinext check` command scans your Next.js application and provides a detailed compatibility report:
+
+```bash
+npx vinext check
+```
+
+### What It Checks
+
+- **Router Type**: App Router vs Pages Router
+- **Next.js Features**: Identifies features like ISR, middleware, i18n routing
+- **API Usage**: Scans for `next/*` module imports
+- **Configuration**: Reviews `next.config.js` for supported options
+- **Dependencies**: Checks for ecosystem libraries (next-themes, nuqs, etc.)
+
+### Example Output
+
+```
+✓ Router: App Router detected
+✓ Server Components: Supported
+✓ Middleware: Found, supported
+⚠ Image Optimization: Partial support (runtime only)
+✗ Turbopack: Not supported (use Vite instead)
+
+Compatibility: 94% (47/50 features supported)
+```
+
+## Common Migration Patterns
+
+### TypeScript Path Aliases
+
+vinext automatically resolves TypeScript path aliases from `tsconfig.json`:
+
+```json
+// tsconfig.json
+{
+  "compilerOptions": {
+    "paths": {
+      "@/*": ["./src/*"],
+      "@/components/*": ["./src/components/*"]
+    }
+  }
+}
+```
+
+No additional configuration needed—imports like `import { Button } from '@/components/ui'` work automatically.
+
+### MDX Support
+
+If your project uses MDX, vinext auto-detects it and configures `@mdx-js/rollup`:
+
+```javascript
+// next.config.js
+const withMDX = require('@next/mdx')({
+  remarkPlugins: [remarkGfm],
+  rehypePlugins: [rehypeHighlight],
+});
+
+module.exports = withMDX({
+  pageExtensions: ['js', 'jsx', 'ts', 'tsx', 'md', 'mdx'],
+});
+```
+
+vinext extracts the remark/rehype plugins from your Next.js config and applies them automatically.
+
+### Environment Variables
+
+`NEXT_PUBLIC_*` variables work exactly as in Next.js:
+
+```bash
+# .env.local
+NEXT_PUBLIC_API_URL=https://api.example.com
+DATABASE_URL=postgresql://localhost/mydb
+```
+
+```typescript
+// Client-side code
+const apiUrl = process.env.NEXT_PUBLIC_API_URL; // Works
+
+// Server-side code
+const dbUrl = process.env.DATABASE_URL; // Works
+```
+
+### Static Assets
+
+The `public/` directory works identically:
+
+```typescript
+// Next.js
+<Image src="/logo.png" alt="Logo" width={100} height={100} />
+
+// vinext - same code
+<Image src="/logo.png" alt="Logo" width={100} height={100} />
+```
+
+## Known Differences
+
+### Image Optimization
+
+**Next.js**: Build-time optimization with automatic format conversion and resizing.
+
+**vinext**: Runtime optimization via CDN or Cloudflare Images binding. No build-time processing.
+
+```typescript
+// Both work identically at runtime
+import Image from 'next/image';
+
+<Image 
+  src="/photo.jpg" 
+  alt="Photo" 
+  width={800} 
+  height={600}
+  quality={85}
+/>
+```
+
+Remote images are handled by [@unpic/react](https://unpic.pics), which auto-detects 28+ CDN providers.
+
+### Font Loading
+
+**Next.js**: Fonts are downloaded and self-hosted at build time.
+
+**vinext**: Fonts are loaded from Google Fonts CDN at runtime.
+
+```typescript
+// Same API, different loading behavior
+import { Inter } from 'next/font/google';
+
+const inter = Inter({ subsets: ['latin'] });
+
+export default function RootLayout({ children }) {
+  return (
+    <html lang="en" className={inter.className}>
+      <body>{children}</body>
+    </html>
+  );
+}
+```
+
+### Build Output
+
+**Next.js**: Creates `.next/` directory with server and client bundles.
+
+**vinext**: 
+- Creates `dist/` directory with multi-environment builds
+- App Router: Separate RSC, SSR, and client bundles
+- Pages Router: Server and client bundles
+
+## Migration Checklist
+
+<AccordionGroup>
+  <Accordion title="Before Migration">
+    - [ ] Run `vinext check` to identify compatibility issues
+    - [ ] Review the [API Coverage](/advanced/api-coverage) page for unsupported features
+    - [ ] Check if your dependencies are compatible
+    - [ ] Backup your project (or commit current state to git)
+    - [ ] Review the [Known Limitations](/advanced/known-limitations) section
+  </Accordion>
+
+  <Accordion title="During Migration">
+    - [ ] Run `vinext init` or manually install vinext
+    - [ ] Test dev server with `vinext dev`
+    - [ ] Verify all routes are discovered correctly
+    - [ ] Check that data fetching works (getStaticProps, Server Components)
+    - [ ] Test client-side navigation and prefetching
+    - [ ] Verify environment variables are loaded
+    - [ ] Check that middleware runs correctly (if applicable)
+  </Accordion>
+
+  <Accordion title="After Migration">
+    - [ ] Run production build with `vinext build`
+    - [ ] Test production server with `vinext start`
+    - [ ] Verify static assets are served correctly
+    - [ ] Test API routes (Pages Router) or route handlers (App Router)
+    - [ ] Check that error pages (404, 500) render correctly
+    - [ ] Run your test suite
+    - [ ] Review build output size and compare to Next.js
+  </Accordion>
+</AccordionGroup>
+
+## Troubleshooting
+
+### ESM/CJS Conflicts
+
+**Error**: `require is not defined` or `exports is not defined`
+
+**Solution**: Your project needs `"type": "module"` in `package.json`. The `vinext init` command handles this automatically.
+
+### Missing Virtual Modules
+
+**Error**: `Cannot find module 'virtual:vinext-*'`
+
+**Solution**: These are Vite virtual modules. Make sure you're using `vinext dev` or `vinext build`, not raw `vite` commands.
+
+### Route Not Found
+
+**Error**: 404 on routes that exist in your filesystem
+
+**Solution**: 
+- Check that files have default exports
+- Verify file extensions (`.tsx`, `.ts`, `.jsx`, `.js`) are standard
+- Check for syntax errors that prevent module loading
+- Run with `DEBUG=vinext:routing` to see route discovery logs
+
+### Middleware Not Running
+
+**Error**: Middleware doesn't execute on requests
+
+**Solution**:
+- Ensure `middleware.ts` is at project root or in `src/`
+- Check the `matcher` config if you're using path-based matching
+- Verify middleware has a default export
+
+### Type Errors
+
+**Error**: TypeScript errors on `next/*` imports
+
+**Solution**: vinext is API-compatible with Next.js types. If you see type errors:
+```bash
+npm install --save-dev @types/react@latest @types/react-dom@latest
+```
+
+## Getting Help
+
+If you encounter issues during migration:
+
+- Check the [Known Limitations](/advanced/known-limitations) page
+- Review [examples](https://github.com/cloudflare/vinext/tree/main/examples) for reference implementations
+- Search [GitHub issues](https://github.com/cloudflare/vinext/issues)
+- Open a new issue with reproduction steps
+
+## Next Steps
+
+After migrating your application:
+
+<CardGroup cols={2}>
+  <Card title="Configuration Guide" icon="sliders" href="/guides/configuration">
+    Learn how to configure vinext and customize the Vite setup
+  </Card>
+  <Card title="Deploy to Cloudflare" icon="rocket" href="/guides/cloudflare-workers">
+    Deploy your application to Cloudflare Workers
+  </Card>
+  <Card title="Static Export" icon="file-export" href="/guides/static-export">
+    Generate a fully static site for any hosting provider
+  </Card>
+  <Card title="API Reference" icon="book" href="/api/cli/overview">
+    Explore the complete vinext API
+  </Card>
+</CardGroup>

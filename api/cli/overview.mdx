@@ -1,0 +1,219 @@
+---
+title: CLI Overview
+description: Complete reference for the vinext command-line interface
+---
+
+The vinext CLI is a drop-in replacement for the `next` command that runs your Next.js app on Vite instead of webpack.
+
+## Installation
+
+```bash
+npm install -D vinext vite @vitejs/plugin-rsc
+```
+
+## Quick Start
+
+```bash
+vinext dev      # Start development server
+vinext build    # Build for production
+vinext start    # Start production server
+```
+
+## Available Commands
+
+The vinext CLI provides these commands:
+
+| Command | Description |
+|---------|-------------|
+| [`dev`](/api/cli/dev) | Start development server with Vite and HMR |
+| [`build`](/api/cli/build) | Build for production (auto-detects App/Pages Router) |
+| [`start`](/api/cli/start) | Serve production build |
+| [`deploy`](/api/cli/deploy) | One-command deployment to Cloudflare Workers |
+| [`init`](/api/cli/init) | Migrate an existing Next.js project to vinext |
+| [`check`](/api/cli/check) | Scan project for compatibility issues |
+
+## Global Options
+
+These options work with all commands:
+
+<ParamField path="--help" type="flag">
+  Show help for a command
+  
+  ```bash
+  vinext --help
+  vinext dev --help
+  ```
+</ParamField>
+
+<ParamField path="--version" type="flag">
+  Show version information
+  
+  ```bash
+  vinext --version
+  # vinext v0.0.1
+  ```
+</ParamField>
+
+## Version Information
+
+Check the installed vinext and Vite versions:
+
+```bash
+vinext --version
+```
+
+During execution, vinext will show the Vite version being used:
+
+```bash
+vinext dev
+# vinext dev  (Vite 6.0.0)
+```
+
+## Configuration
+
+vinext requires minimal configuration:
+
+### Automatic Configuration (No Config File)
+
+If you don't have a `vite.config.ts` file, vinext auto-configures everything:
+
+- Registers the vinext plugin automatically
+- Auto-detects App Router (`app/` directory) and registers RSC plugin
+- Deduplicates React packages (prevents "Invalid hook call" errors)
+- Works with both `app/` and `src/app/`, `pages/` and `src/pages/`
+
+### Manual Configuration (vite.config.ts)
+
+For custom setups, create a `vite.config.ts`:
+
+```typescript
+import { defineConfig } from 'vite'
+import vinext from 'vinext'
+
+export default defineConfig({
+  plugins: [vinext()],
+})
+```
+
+If you have a config file, vinext uses it instead of auto-configuration.
+
+## Compatibility Flags
+
+vinext accepts some Next.js flags for drop-in compatibility, but ignores them:
+
+<ParamField path="--turbopack" type="flag">
+  Accepted for compatibility with Next.js scripts. No-op (Vite is always used).
+</ParamField>
+
+<ParamField path="--experimental-https" type="flag">
+  Accepted for compatibility. No-op. Configure HTTPS in `vite.config.ts` if needed.
+</ParamField>
+
+## Environment Variables
+
+vinext respects these environment variables:
+
+| Variable | Description | Default |
+|----------|-------------|--------|
+| `PORT` | Production server port (used by `vinext start`) | `3000` |
+| `CLOUDFLARE_API_TOKEN` | API token for Cloudflare Workers deployment | - |
+
+## Development vs Production
+
+### Development Mode (`vinext dev`)
+
+- **App Router**: Uses Vite dev server with HMR for React Server Components
+- **Pages Router**: Server-side renders on each request with full reload on changes
+- **Module resolution**: Resolves Vite from your project's `node_modules` to prevent dual instances
+
+### Production Mode (`vinext build` + `vinext start`)
+
+- **App Router**: Multi-environment build (RSC, SSR, Client) using `createBuilder()`
+- **Pages Router**: Separate client and server builds
+- **Output**: `dist/client/` (static assets), `dist/server/` (SSR entry)
+- **Optimizations**: Code splitting, tree-shaking, minification
+
+## Router Detection
+
+vinext automatically detects your router type:
+
+<CodeGroup>
+```bash App Router
+# Detects app/ or src/app/
+vinext dev
+# vinext dev  (Vite 6.0.0)
+# [App Router detected]
+```
+
+```bash Pages Router
+# Detects pages/ or src/pages/ (no app/ directory)
+vinext dev
+# vinext dev  (Vite 6.0.0)
+# [Pages Router detected]
+```
+</CodeGroup>
+
+## Common Workflows
+
+### Local Development
+
+```bash
+# Start dev server
+vinext dev
+
+# Custom port
+vinext dev --port 4000
+
+# Custom hostname
+vinext dev --hostname 0.0.0.0
+```
+
+### Production Build and Deploy
+
+```bash
+# Build and run locally
+vinext build
+vinext start
+
+# Build and deploy to Cloudflare Workers
+vinext deploy
+
+# Deploy preview environment
+vinext deploy --preview
+```
+
+### Migrating an Existing Project
+
+```bash
+# Check compatibility first
+vinext check
+
+# Run automated migration
+vinext init
+
+# Start dev server
+npm run dev:vinext
+```
+
+## Module Resolution
+
+vinext dynamically resolves Vite from your project's `node_modules` at runtime, not from vinext's own dependencies. This prevents dual Vite instances when using `npm link` or `bun link` during development.
+
+If Vite cannot be resolved from your project, vinext falls back to its bundled copy.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="dev Command" icon="laptop-code" href="/api/cli/dev">
+    Start the development server
+  </Card>
+  <Card title="build Command" icon="hammer" href="/api/cli/build">
+    Build for production
+  </Card>
+  <Card title="deploy Command" icon="rocket" href="/api/cli/deploy">
+    Deploy to Cloudflare Workers
+  </Card>
+  <Card title="check Command" icon="clipboard-check" href="/api/cli/check">
+    Check project compatibility
+  </Card>
+</CardGroup>
