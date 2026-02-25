@@ -1,0 +1,157 @@
+{
+  "projectType": "framework",
+  "projectName": "vinext",
+  "projectDescription": "Vite plugin that reimplements the Next.js API surface — deploy anywhere, optimized for Cloudflare Workers",
+  "theme": "aspen",
+  "primaryColor": "#F48120",
+  "lightColor": "#FBAD41",
+  "darkColor": "#D96B20",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/routing",
+              "concepts/server-components",
+              "concepts/caching"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/migration",
+              "guides/deployment",
+              "guides/cloudflare-workers",
+              "guides/configuration",
+              "guides/static-export"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "CLI",
+            "pages": [
+              "api/cli/overview",
+              "api/cli/dev",
+              "api/cli/build",
+              "api/cli/start",
+              "api/cli/deploy",
+              "api/cli/init",
+              "api/cli/check"
+            ]
+          },
+          {
+            "group": "Module Shims",
+            "pages": [
+              "api/modules/overview",
+              "api/modules/link",
+              "api/modules/image",
+              "api/modules/navigation",
+              "api/modules/router",
+              "api/modules/server",
+              "api/modules/headers",
+              "api/modules/cache",
+              "api/modules/dynamic",
+              "api/modules/script",
+              "api/modules/font"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "api/config/next-config",
+              "api/config/vite-config",
+              "api/config/route-segment"
+            ]
+          },
+          {
+            "group": "Cloudflare",
+            "pages": [
+              "api/cloudflare/kv-cache-handler",
+              "api/cloudflare/image-optimization",
+              "api/cloudflare/bindings"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Advanced",
+        "groups": [
+          {
+            "group": "Internals",
+            "pages": [
+              "advanced/architecture-deep-dive",
+              "advanced/rsc-integration",
+              "advanced/build-pipeline",
+              "advanced/virtual-modules"
+            ]
+          },
+          {
+            "group": "Compatibility",
+            "pages": [
+              "advanced/api-coverage",
+              "advanced/known-limitations",
+              "advanced/ecosystem-libraries"
+            ]
+          },
+          {
+            "group": "Contributing",
+            "pages": [
+              "contributing/overview",
+              "contributing/development-setup",
+              "contributing/testing",
+              "contributing/adding-features"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Drop-in Next.js API compatibility on Vite",
+    "Full Pages Router and App Router support",
+    "React Server Components via @vitejs/plugin-rsc",
+    "One-command Cloudflare Workers deployment",
+    "Pluggable ISR caching with KV backend",
+    "File-system routing with hot reload",
+    "Complete next/* module shims",
+    "Fast HMR and development experience"
+  ],
+  "publicApiSurface": [
+    "vinext() - Vite plugin",
+    "vinext dev - Start development server",
+    "vinext build - Production build",
+    "vinext start - Start production server",
+    "vinext deploy - Deploy to Cloudflare Workers",
+    "vinext init - Migrate Next.js project",
+    "vinext check - Compatibility scanner",
+    "next/link - Link component",
+    "next/image - Image component",
+    "next/navigation - Navigation hooks",
+    "next/router - Pages Router API",
+    "next/server - Server utilities",
+    "next/headers - Request headers/cookies",
+    "next/cache - Cache utilities",
+    "next/dynamic - Dynamic imports",
+    "next/script - Script loading",
+    "next/font - Font loading",
+    "next/og - OG image generation",
+    "KVCacheHandler - Cloudflare KV cache",
+    "setCacheHandler() - Configure cache backend"
+  ]
+}
