@@ -64,7 +64,8 @@
               "api/cli/start",
               "api/cli/deploy",
               "api/cli/init",
-              "api/cli/check"
+              "api/cli/check",
+              "api/cli/lint"
             ]
           },
           {

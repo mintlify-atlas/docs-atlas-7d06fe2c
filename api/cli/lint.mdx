@@ -1,0 +1,234 @@
+---
+title: vinext lint
+description: Run linter on your codebase
+---
+
+## Overview
+
+The `vinext lint` command delegates to your project's linter (eslint or oxlint), making it easy to check code quality without remembering which linter you're using.
+
+```bash
+vinext lint
+```
+
+## How It Works
+
+vinext automatically detects and uses the appropriate linter:
+
+1. **eslint with Next.js config** — If you have eslint installed with an existing config (`.eslintrc.json`, `eslint.config.js`, etc.), vinext runs `eslint .`
+2. **oxlint** — If oxlint is installed, vinext uses it (much faster than eslint)
+3. **eslint fallback** — If only eslint is installed without config, runs `eslint .`
+4. **No linter** — Suggests installation options
+
+## Options
+
+<ParamField path="--help" type="flag">
+  Show help for the lint command
+</ParamField>
+
+## Setup
+
+### Using eslint (Next.js style)
+
+```bash npm
+npm install -D eslint eslint-config-next
+```
+
+Create `.eslintrc.json`:
+
+```json
+{
+  "extends": "next/core-web-vitals"
+}
+```
+
+### Using oxlint (faster)
+
+```bash npm
+npm install -D oxlint
+```
+
+Create `.oxlintrc.json`:
+
+```json
+{
+  "rules": {
+    "typescript": "error",
+    "react": "error"
+  }
+}
+```
+
+## Examples
+
+### Basic usage
+
+```bash
+vinext lint
+```
+
+Output:
+```
+vinext lint
+
+Using eslint (with existing config)
+
+✓ No linting errors found
+
+Lint passed.
+```
+
+### With oxlint
+
+```bash
+vinext lint
+```
+
+Output:
+```
+vinext lint
+
+Using oxlint
+
+Lint passed.
+```
+
+### No linter installed
+
+```bash
+vinext lint
+```
+
+Output:
+```
+vinext lint
+
+No linter found. Install eslint or oxlint:
+
+  npm install -D eslint eslint-config-next
+  # or
+  npm install -D oxlint
+```
+
+## Linter Detection Priority
+
+vinext checks for linters in this order:
+
+1. **eslint + config files** — `.eslintrc.json`, `.eslintrc.js`, `.eslintrc.cjs`, `eslint.config.js`, `eslint.config.mjs`
+2. **oxlint** — Checks for `node_modules/.bin/oxlint`
+3. **eslint (no config)** — Checks for `node_modules/.bin/eslint`
+
+## Integration with CI/CD
+
+### GitHub Actions
+
+```yaml
+name: Lint
+on: [push, pull_request]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install
+      - run: npm run lint  # or vinext lint
+```
+
+### package.json script
+
+```json
+{
+  "scripts": {
+    "lint": "vinext lint"
+  }
+}
+```
+
+## Configuration
+
+### eslint-config-next rules
+
+The `eslint-config-next` package includes rules for:
+- React Hooks
+- Next.js best practices
+- Accessibility (jsx-a11y)
+- Import organization
+
+### oxlint configuration
+
+oxlint is faster but has fewer rules. Configure via `.oxlintrc.json`:
+
+```json
+{
+  "rules": {
+    "typescript": "error",
+    "react": "error",
+    "jsx-a11y": "warn"
+  },
+  "deny-warnings": true
+}
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="eslint reports no files to lint">
+    Add a `.eslintignore` file or configure `ignorePatterns` in your eslint config:
+
+    ```json
+    {
+      "extends": "next/core-web-vitals",
+      "ignorePatterns": ["dist/", "node_modules/", ".next/"]
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="oxlint too strict">
+    Adjust rule levels in `.oxlintrc.json`:
+
+    ```json
+    {
+      "rules": {
+        "typescript": "warn",
+        "react": "error"
+      }
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Linting is slow">
+    Consider switching to oxlint:
+
+    ```bash
+    npm install -D oxlint
+    vinext lint  # automatically uses oxlint
+    ```
+
+    oxlint is typically 50-100x faster than eslint.
+  </Accordion>
+</AccordionGroup>
+
+## Comparison: eslint vs oxlint
+
+| Feature | eslint | oxlint |
+|---------|--------|--------|
+| Speed | Slower (5-10s for medium projects) | Much faster (0.1-0.5s) |
+| Rules | 200+ rules, highly configurable | ~100 rules, focused on correctness |
+| Plugins | Extensive ecosystem | No plugin support |
+| Auto-fix | Yes | Yes (limited) |
+| Next.js integration | Official `eslint-config-next` | Manual configuration |
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="typecheck" icon="code" href="/api/cli/overview">
+    Type check with TypeScript
+  </Card>
+  <Card title="test" icon="vial" href="/contributing/testing">
+    Run tests
+  </Card>
+</CardGroup>
